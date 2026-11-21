@@ -1022,8 +1022,23 @@ async function widget(env) {
   return {
     range_km: c.range_km, fuel_pct: c.fuel_pct, locked: c.locked, doors_open: c.doors_open || [],
     tyres: c.tyres, tyres_low: c.tyres_low || [], battery_v: c.battery_v, odometer_km: c.odometer_km,
-    alerts: c.alerts || [], data_ts: c.data_ts || c.ts, circuit: c.circuit || null
+    alerts: c.alerts || [], data_ts: c.data_ts || c.ts, circuit: c.circuit || null,
+    engine_c: c.oil_c ?? c.coolant_c ?? null, oil_life_pct: c.oil_life_pct ?? null, battery_soc: c.battery_soc ?? null,
+    ignition: c.ignition, speed_kmh: c.speed_kmh || 0, next: await widgetNext(env)
   };
+}
+
+// Lo próximo que toca: fecha o mantenimiento más cercano
+async function widgetNext(env) {
+  try {
+    const { items: dl } = await listDeadlines(env);
+    const { items: mt } = await listMaint(env);
+    const c = [];
+    for (const d of dl) if (d.days != null && d.days <= 60) c.push({ text: d.days < 0 ? `${d.name} vencido` : `${d.name} en ${d.days} d`, urgent: d.days <= 7, w: d.days });
+    for (const m of mt) if (m.status === 'vencido' || m.status === 'pronto') c.push({ text: `${m.name}: ${m.summary.split(' · ')[0]}`, urgent: m.status === 'vencido', w: m.status === 'vencido' ? -1 : 30 });
+    c.sort((a, b) => a.w - b.w);
+    return c[0] || null;
+  } catch (e) { return null; }
 }
 
 async function circuitStats(env) {

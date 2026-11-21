@@ -1,10 +1,10 @@
 // Fiesta ST Garaje — widget para la pantalla de inicio del iPhone (app gratuita "Scriptable").
-// La primera vez que lo ejecutes dentro de Scriptable te pide la URL del servidor y la contraseña (APP_KEY)
-// y las guarda en el llavero del iPhone. Para cambiarlas, borra el script y vuelve a crearlo.
+// Tamaños: pequeño (lo básico) y mediano (todo). La primera vez que lo ejecutes dentro de Scriptable
+// te pide la URL del servidor y la contraseña (APP_KEY) y las guarda en el llavero del iPhone.
 
 const URL_KEY = 'fiesta_st_url', PASS_KEY = 'fiesta_st_key';
 const AC = new Color('#ffd400'), OK = new Color('#2ee59d'), WA = new Color('#ffb21e'), BAD = new Color('#ff4d3d');
-const MU = new Color('#7d858f'), TX = new Color('#f4f5f6'), BG = new Color('#0a0b0d');
+const MU = new Color('#7d858f'), TX = new Color('#f4f5f6'), BG = new Color('#0a0b0d'), PN = new Color('#16191d');
 
 async function ask(title, key, secure) {
   if (Keychain.contains(key) && Keychain.get(key).trim()) return Keychain.get(key);
@@ -30,47 +30,126 @@ try {
 } catch (e) { err = 'Sin conexión: ' + e.message; }
 if (err && /401|Contraseña/i.test(err)) Keychain.remove(PASS_KEY);
 
+const fam = config.widgetFamily || (config.runsInWidget ? 'small' : 'medium');
+const f2 = v => v == null ? '—' : v.toFixed(2).replace('.', ',');
+const n0 = v => v == null ? '—' : Math.round(v).toLocaleString('es-ES');
+
+function txt(stack, s, size, color, weight = 'medium', mono = false) {
+  const t = stack.addText(String(s));
+  t.font = mono ? (weight === 'bold' ? Font.boldMonospacedSystemFont(size) : Font.mediumMonospacedSystemFont(size))
+    : weight === 'bold' ? Font.boldSystemFont(size) : weight === 'regular' ? Font.systemFont(size) : Font.mediumSystemFont(size);
+  t.textColor = color;
+  t.lineLimit = 1;
+  t.minimumScaleFactor = 0.7;
+  return t;
+}
+
+function label(stack, s) { return txt(stack, s.toUpperCase(), 9, MU, 'bold'); }
+
+function bar(stack, pct, width, color) {
+  const c = new DrawContext();
+  c.size = new Size(width, 6); c.opaque = false; c.respectScreenScale = true;
+  const bg = new Path(); bg.addRoundedRect(new Rect(0, 0, width, 6), 3, 3); c.addPath(bg); c.setFillColor(new Color('#2a2f35')); c.fillPath();
+  const w = Math.max(6, width * Math.max(0, Math.min(1, pct / 100)));
+  const fg = new Path(); fg.addRoundedRect(new Rect(0, 0, w, 6), 3, 3); c.addPath(fg); c.setFillColor(color); c.fillPath();
+  const img = stack.addImage(c.getImage()); img.imageSize = new Size(width, 6);
+}
+
+function ago(ts) {
+  const m = Math.round((Date.now() - ts) / 60e3);
+  return m < 1 ? 'ahora' : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : `hace ${Math.round(m / 1440)} d`;
+}
+
 const w = new ListWidget();
 w.backgroundColor = BG;
-w.setPadding(14, 14, 14, 14);
 w.url = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
 w.refreshAfterDate = new Date(Date.now() + 15 * 60e3);
 
-const head = w.addText('FIESTA ST');
-head.font = Font.boldMonospacedSystemFont(11); head.textColor = MU;
-w.addSpacer(4);
-
 if (!d) {
-  const t = w.addText(err || 'Sin datos'); t.textColor = BAD; t.font = Font.mediumSystemFont(13);
-} else {
-  const range = w.addText(`${d.range_km ?? '—'} km`);
-  range.font = Font.boldMonospacedSystemFont(28); range.textColor = TX;
-  const fuel = w.addText(`Depósito ${Math.round(d.fuel_pct ?? 0)} %`);
-  fuel.font = Font.mediumSystemFont(12); fuel.textColor = (d.fuel_pct ?? 100) < 15 ? WA : MU;
+  w.setPadding(14, 14, 14, 14);
+  txt(w, 'FIESTA ST', 11, MU, 'bold', true);
   w.addSpacer(6);
-
-  const lock = w.addText(d.locked ? '● Cerrado' : '● Abierto');
-  lock.font = Font.boldSystemFont(13); lock.textColor = d.locked ? OK : WA;
-  if (d.doors_open && d.doors_open.length) { const t = w.addText('Puerta abierta'); t.font = Font.mediumSystemFont(12); t.textColor = WA; }
-
-  const t = d.tyres || {}, f = v => v == null ? '—' : v.toFixed(2).replace('.', ',');
-  const low = d.tyres_low || [];
+  const t = txt(w, err || 'Sin datos', 13, BAD); t.lineLimit = 4;
+} else if (fam === 'small') {
+  w.setPadding(14, 14, 14, 14);
+  txt(w, 'FIESTA ST', 11, MU, 'bold', true);
+  w.addSpacer(4);
+  txt(w, `${n0(d.range_km)} km`, 28, TX, 'bold', true);
+  txt(w, `Depósito ${n0(d.fuel_pct)} %`, 12, (d.fuel_pct ?? 100) < 15 ? WA : MU);
+  w.addSpacer(6);
+  txt(w, d.locked ? '● Cerrado' : '● Abierto', 13, d.locked ? OK : WA, 'bold');
+  const low = d.tyres_low || [], t = d.tyres || {};
   for (const [a, b] of [['fl', 'fr'], ['rl', 'rr']]) {
     const row = w.addStack();
-    for (const k of [a, b]) {
-      const x = row.addText(f(t[k]));
-      x.font = Font.mediumMonospacedSystemFont(12);
-      x.textColor = low.includes(k) ? WA : TX;
-      if (k === a) row.addSpacer(10);
-    }
+    txt(row, f2(t[a]), 12, low.includes(a) ? WA : TX, 'medium', true); row.addSpacer(10);
+    txt(row, f2(t[b]), 12, low.includes(b) ? WA : TX, 'medium', true);
   }
-  if (d.circuit) { const c = w.addText('🏁 ' + d.circuit); c.font = Font.boldSystemFont(11); c.textColor = AC; }
+  w.addSpacer();
+  txt(w, ago(d.data_ts), 10, MU, 'regular');
+} else {
+  // ---------- Mediano ----------
+  w.setPadding(12, 14, 12, 14);
+  const running = d.ignition && d.ignition !== 'off';
+
+  // Cabecera
+  const top = w.addStack(); top.centerAlignContent();
+  txt(top, 'FIESTA ST', 11, AC, 'bold', true);
+  if (d.circuit) { top.addSpacer(6); txt(top, '🏁 ' + d.circuit, 11, AC, 'bold'); }
+  top.addSpacer();
+  txt(top, running ? `● En marcha · ${n0(d.speed_kmh)} km/h` : d.locked ? '● Cerrado' : '● Abierto', 11, running ? AC : d.locked ? OK : WA, 'bold');
+  w.addSpacer(8);
+
+  const body = w.addStack(); body.layoutHorizontally();
+
+  // Columna 1: autonomía y depósito
+  const c1 = body.addStack(); c1.layoutVertically(); c1.size = new Size(112, 0);
+  label(c1, 'Autonomía');
+  const r = c1.addStack(); r.bottomAlignContent();
+  txt(r, n0(d.range_km), 30, TX, 'bold', true); r.addSpacer(3); txt(r, 'km', 12, MU);
+  c1.addSpacer(4);
+  bar(c1, d.fuel_pct ?? 0, 100, (d.fuel_pct ?? 100) < 15 ? WA : AC);
+  c1.addSpacer(3);
+  txt(c1, `Depósito ${n0(d.fuel_pct)} %`, 11, MU);
+  if (d.doors_open && d.doors_open.length) { c1.addSpacer(2); txt(c1, 'Puerta abierta', 11, WA, 'bold'); }
+
+  body.addSpacer(10);
+
+  // Columna 2: neumáticos
+  const c2 = body.addStack(); c2.layoutVertically(); c2.size = new Size(84, 0);
+  label(c2, 'Neumáticos');
+  c2.addSpacer(4);
+  const low = d.tyres_low || [], t = d.tyres || {};
+  for (const [a, b] of [['fl', 'fr'], ['rl', 'rr']]) {
+    const row = c2.addStack(); row.spacing = 6;
+    for (const k of [a, b]) {
+      const cell = row.addStack(); cell.backgroundColor = PN; cell.cornerRadius = 6; cell.setPadding(3, 5, 3, 5);
+      txt(cell, f2(t[k]), 12, low.includes(k) ? WA : OK, 'bold', true);
+    }
+    c2.addSpacer(4);
+  }
+
+  body.addSpacer(10);
+
+  // Columna 3: motor, batería, aceite, km
+  const c3 = body.addStack(); c3.layoutVertically();
+  const kv = (k, v, col = TX) => { const s = c3.addStack(); txt(s, k, 11, MU); s.addSpacer(); txt(s, v, 11, col, 'bold', true); c3.addSpacer(3); };
+  const eng = d.engine_c;
+  kv('Motor', eng == null ? '—' : `${eng}°`, eng == null ? TX : eng < 60 ? new Color('#4aa3ff') : eng > 110 ? BAD : TX);
+  kv('Batería', d.battery_v == null ? '—' : `${f2(d.battery_v)} V`, d.battery_v != null && d.battery_v < 12.2 ? WA : TX);
+  kv('Aceite', d.oil_life_pct == null ? '—' : `${n0(d.oil_life_pct)} %`, d.oil_life_pct != null && d.oil_life_pct < 20 ? WA : TX);
+  kv('Km', n0(d.odometer_km));
 
   w.addSpacer();
-  const ago = Math.round((Date.now() - d.data_ts) / 60e3);
-  const when = w.addText(ago < 60 ? `hace ${ago} min` : `hace ${Math.round(ago / 60)} h`);
-  when.font = Font.systemFont(10); when.textColor = MU;
+
+  // Pie: aviso o lo próximo del taller, y cuándo son los datos
+  const foot = w.addStack(); foot.centerAlignContent();
+  const alert = (d.alerts || [])[0];
+  if (alert) txt(foot, '⚠︎ ' + alert, 10, WA, 'medium');
+  else if (d.next) txt(foot, '🔧 ' + d.next.text, 10, d.next.urgent ? WA : MU, 'medium');
+  foot.addSpacer();
+  txt(foot, ago(d.data_ts), 10, MU, 'regular');
 }
 
-if (config.runsInWidget) Script.setWidget(w); else await w.presentSmall();
+if (config.runsInWidget) Script.setWidget(w);
+else if (fam === 'small') await w.presentSmall(); else await w.presentMedium();
 Script.complete();
