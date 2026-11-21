@@ -127,7 +127,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let tyrePrefs = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -169,6 +169,7 @@ async function loadFor(t, force) {
   const add = (key, ms, fn) => { if (force || stale(key, ms)) jobs.push(fn().then(() => { loaded[key] = Date.now(); })); };
   if (t === 'estado') add('parking', 30e3, async () => { parking = await api('/api/parking'); });
   if (t === 'ajustes') add('guard', 30e3, async () => { guard = await api('/api/guard'); });
+  if (t === 'ajustes') add('tyres', 300e3, async () => { tyrePrefs = await api('/api/tyres'); });
   if (t === 'estado' || t === 'datos') add('battery', 300e3, async () => { battery = await api('/api/battery'); });
   if (t === 'estado' || t === 'taller') add('maint', t === 'taller' ? 30e3 : 300e3, async () => { maint = await api('/api/maintenance'); });
   if (t === 'estado' || t === 'datos') add('fuel', 600e3, async () => {
@@ -610,6 +611,15 @@ function viewAjustes() {
       : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
   </div>
   <div class="pn pad col" style="gap:12px">
+    <span class="k">Presiones de diario (bar)</span>
+    <p class="muted">Los avisos de presión baja usan estas. Si las dejas vacías, se usan las que trae guardadas el coche (2,07 / 1,79). En circuito no hay avisos.</p>
+    <div class="g2">
+      <label>Delante<input id="tFront" inputmode="decimal" placeholder="2,20" value="${tyrePrefs && tyrePrefs.front ? nf(tyrePrefs.front, 2) : ''}"></label>
+      <label>Detrás<input id="tRear" inputmode="decimal" placeholder="2,10" value="${tyrePrefs && tyrePrefs.rear ? nf(tyrePrefs.rear, 2) : ''}"></label>
+    </div>
+    <button class="btn sec" id="tSave">Guardar presiones</button>
+  </div>
+  <div class="pn pad col" style="gap:12px">
     <span class="k">Vigilancia</span>
     ${guard ? `
     <label style="flex-direction:row;align-items:center;justify-content:space-between;text-transform:none;letter-spacing:0;font:500 15px var(--body);color:var(--tx)">Siempre activa<input type="checkbox" id="gEnabled" ${guard.enabled ? 'checked' : ''} style="width:auto;accent-color:${C.ac};transform:scale(1.4)"></label>
@@ -828,6 +838,12 @@ function bindSettings() {
     try {
       guard = await api('/api/guard', { method: 'POST', body: JSON.stringify({ enabled: $('#gEnabled').checked, night: $('#gNight').checked, from: $('#gFrom').value, to: $('#gTo').value }) });
       loaded.guard = Date.now(); flash('Vigilancia guardada');
+    } catch (e) { error = e.message; render(); }
+  };
+  const ts = $('#tSave'); if (ts) ts.onclick = async () => {
+    try {
+      tyrePrefs = await api('/api/tyres', { method: 'POST', body: JSON.stringify({ front: $('#tFront').value, rear: $('#tRear').value }) });
+      flash('Presiones guardadas'); live = null; loadLive();
     } catch (e) { error = e.message; render(); }
   };
   ['#gEnabled', '#gNight', '#gFrom', '#gTo'].forEach(id => { const el = $(id); if (el) el.onchange = saveGuard; });

@@ -88,6 +88,8 @@ export default {
       if (m === 'DELETE' && p.startsWith('/api/circuits/custom/')) return json(await delCustomCircuit(env, decodeURIComponent(p.slice(21))));
       if (m === 'GET' && p === '/api/track') return json(await getTrack(env));
       if (m === 'POST' && p === '/api/track') return json(await setTrack(env, await req.json()));
+      if (m === 'GET' && p === '/api/tyres') return json(await getTyrePrefs(env));
+      if (m === 'POST' && p === '/api/tyres') return json(await setTyrePrefs(env, await req.json()));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
       if (m === 'POST' && p === '/api/guard') return json(await setGuard(env, await req.json()));
       if (m === 'GET' && p === '/api/parking') return json(await getParking(env));
@@ -130,6 +132,7 @@ export default {
 
 async function readCar(env) {
   const car = src(env) === 'ford' ? await fordCar(env) : mockCar(Date.now());
+  applyTyrePrefs(car, await getTyrePrefs(env));
   const track = await getTrack(env);
   const here = circuitAt(car.location);
   car.circuit = here ? here.name : null;
@@ -575,6 +578,7 @@ function processCar(db, st, c, opts = {}) {
 
 async function ingest(env, car, st) {
   st = st || await loadState(env);
+  applyTyrePrefs(car, await getTyrePrefs(env));
   const guard = await getGuard(env);
   const { stmts, notes } = processCar(env.DB, st, car, { guard });
   if (car.ignition === 'off' && car.location && !st.parked) {
@@ -902,6 +906,35 @@ async function setTrack(env, b) {
   await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('track', ?)").bind(JSON.stringify({ until })).run();
   await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
   return getTrack(env);
+}
+
+// Presiones de referencia propias (bar). Si no hay, se usan las que manda el coche.
+async function getTyrePrefs(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'tyre_prefs'").first();
+  return { front: null, rear: null, ...(row ? JSON.parse(row.v) : {}) };
+}
+
+async function setTyrePrefs(env, b) {
+  const v = x => { const n = parseFloat(String(x ?? '').replace(',', '.')); return n >= 1.5 && n <= 3.5 ? Math.round(n * 100) / 100 : null; };
+  const t = { front: v(b.front), rear: v(b.rear) };
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('tyre_prefs', ?)").bind(JSON.stringify(t)).run();
+  await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
+  return t;
+}
+
+function applyTyrePrefs(car, pr) {
+  if (!car || !car.tyres || (!pr.front && !pr.rear)) return car;
+  const car_ref = car.tyre_ref || {};
+  const ref = { ...car_ref };
+  if (pr.front) ref.fl = ref.fr = pr.front;
+  if (pr.rear) ref.rl = ref.rr = pr.rear;
+  car.tyre_ref = ref;
+  car.tyre_ref_custom = true;
+  // Baja: más de un 12 % por debajo de tu presión, o el coche la marca como baja
+  const carLow = car.tyres_low_car || car.tyres_low || [];
+  car.tyres_low_car = carLow;
+  car.tyres_low = Object.keys(car.tyres).filter(k => car.tyres[k] != null && ((ref[k] && car.tyres[k] < ref[k] * 0.88) || carLow.includes(k)));
+  return car;
 }
 
 async function getGuard(env) {
