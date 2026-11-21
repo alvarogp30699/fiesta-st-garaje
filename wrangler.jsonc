@@ -12,7 +12,9 @@
     }
   ],
   "vars": {
-    "SOURCE": "mock"
+    "SOURCE": "mock",
+    "FUEL_TYPE": "98",
+    "PROVINCE": "43"
   },
   "triggers": {
     "crons": ["* * * * *"]

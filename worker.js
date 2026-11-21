@@ -3,7 +3,7 @@
 // Secret APP_KEY: contraseña de la app.
 // SOURCE = "mock" (coche simulado) o "ford" (coche real).
 
-const SCHEMA = '2';
+const SCHEMA = '3';
 const TANK_L = 42;               // depósito Fiesta ST Mk8
 const LIVE_MIN_INTERVAL_S = 30;  // con Ford real: no consultar más a menudo
 const GAP_PARKED_S = 300;        // registro del histórico aparcado
@@ -11,6 +11,8 @@ const GAP_DRIVING_S = 60;        // registro del histórico en marcha
 const POINT_GAP_S = 15;          // puntos del recorrido
 const UNLOCKED_GRACE_S = 300;    // margen antes de avisar de coche abierto
 const TYRE_MIN = 2.2, BATT_MIN = 12.2, FUEL_MIN = 12, OIL_WARM = 80;
+const FUEL_API = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/FiltroProvincia/';
+const FUEL_FIELDS = { '95': 'Precio Gasolina 95 E5', '98': 'Precio Gasolina 98 E5' };
 const PUSH_SUBJECT = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
 const TYRE_NAMES = { fl: 'delantera izquierda', fr: 'delantera derecha', rl: 'trasera izquierda', rr: 'trasera derecha' };
 const DEFAULT_MAINT = [
@@ -36,6 +38,8 @@ export default {
       if (m === 'GET' && p === '/api/battery') return json(await getBattery(env, clampInt(url.searchParams.get('days'), 3, 90, 14)));
       if (m === 'GET' && p === '/api/refuels') return json(await getRefuels(env));
       if (m === 'POST' && (mt = p.match(/^\/api\/refuels\/(\d+)$/))) return json(await updateRefuel(env, +mt[1], await req.json()));
+      if (m === 'GET' && p === '/api/trips/records') return json(await tripRecords(env));
+      if (m === 'GET' && p === '/api/fuel') return json(await nearbyFuel(env, url.searchParams));
       if (m === 'GET' && p === '/api/trips') return json(await listTrips(env, clampInt(url.searchParams.get('limit'), 1, 200, 40)));
       if (m === 'GET' && (mt = p.match(/^\/api\/trips\/(\d+)$/))) return json(await getTrip(env, +mt[1]));
       if (m === 'GET' && p === '/api/maintenance') return json(await listMaint(env));
@@ -190,6 +194,7 @@ function processCar(db, st, c, opts = {}) {
       stmts.push(db.prepare('INSERT OR REPLACE INTO refuels (ts, odometer, fuel_before, fuel_after, litres) VALUES (?, ?, ?, ?, ?)')
         .bind(c.ts, c.odometer_km, st.snapFuel, c.fuel_pct, litres));
       notes.push({ title: 'Repostaje detectado', body: `Unos ${fmt(litres, 1)} L. Toca para apuntar el precio.`, url: '#datos', tag: 'refuel' });
+      st.newRefuel = { ts: c.ts, litres, lat: c.location?.lat, lon: c.location?.lon };
     }
     st.snapFuel = c.fuel_pct;
     st.last = { ts: c.ts, ignition: c.ignition };
@@ -258,6 +263,22 @@ function processCar(db, st, c, opts = {}) {
 async function ingest(env, car, st) {
   st = st || await loadState(env);
   const { stmts, notes } = processCar(env.DB, st, car);
+  const nr = st.newRefuel;
+  delete st.newRefuel;
+  if (nr && nr.lat != null) {
+    try {
+      const type = env.FUEL_TYPE || '98';
+      const { list } = await fuelStations(env);
+      const near = list.map(s => ({ ...s, km: distKm(nr.lat, nr.lon, s.lat, s.lon) })).filter(s => s.km < 0.35 && s['p' + type]).sort((a, b) => a.km - b.km)[0];
+      if (near) {
+        const price = near['p' + type];
+        const total = round(price * nr.litres, 2);
+        stmts.push(env.DB.prepare('UPDATE refuels SET price_total = ?, station = ?, price_auto = 1 WHERE ts = ? AND price_total IS NULL').bind(total, near.name, nr.ts));
+        const n = notes.find(x => x.tag === 'refuel');
+        if (n) n.body = `${near.name}: unos ${fmt(nr.litres, 1)} L a ${fmt(price, 3)} €/L ≈ ${fmt(total, 2)} €. Toca para corregirlo.`;
+      }
+    } catch (e) { console.error('precio auto', e); }
+  }
   stmts.push(stateStmt(env.DB, st));
   await env.DB.batch(stmts);
   for (const n of notes) await sendPushAll(env, n);
@@ -279,6 +300,9 @@ async function daily(env, when) {
       title: 'Mantenimiento', url: '#taller', tag: 'maint',
       body: due.map(i => `${i.name}: ${i.summary}`).join(' · ')
     });
+  }
+  if (local.getUTCDay() === 1) {
+    try { await sendPushAll(env, await weeklySummary(env)); } catch (e) { console.error('semanal', e); }
   }
   const b = await getBattery(env, 14);
   if (b.status === 'bajando') {
@@ -305,7 +329,7 @@ async function prepare(env) {
   }
   await db.batch([
     db.prepare('CREATE TABLE IF NOT EXISTS snapshots (ts INTEGER PRIMARY KEY, odometer REAL, fuel_pct REAL, battery_v REAL, data TEXT)'),
-    db.prepare('CREATE TABLE IF NOT EXISTS refuels (ts INTEGER PRIMARY KEY, odometer REAL, fuel_before REAL, fuel_after REAL, litres REAL, price_total REAL, station TEXT)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS refuels (ts INTEGER PRIMARY KEY, odometer REAL, fuel_before REAL, fuel_after REAL, litres REAL, price_total REAL, station TEXT, price_auto INTEGER)'),
     db.prepare(`CREATE TABLE IF NOT EXISTS trips (id INTEGER PRIMARY KEY AUTOINCREMENT, start_ts INTEGER, end_ts INTEGER,
       start_odo REAL, end_odo REAL, km REAL, duration_s INTEGER, avg_speed INTEGER, max_speed INTEGER, max_rpm INTEGER,
       max_oil INTEGER, avg_throttle INTEGER, rpm_high_pct INTEGER, fuel_used_l REAL,
@@ -348,6 +372,7 @@ async function backfillMock(env) {
     all.push(...processCar(db, st, c, { gapParked: 1800, gapDriving: 300 }).stmts);
     ts += c.ignition !== 'off' ? 60e3 : 300e3;
   }
+  delete st.newRefuel;
   all.push(stateStmt(db, st));
   all.push(db.prepare("INSERT OR REPLACE INTO kv VALUES ('demo', '1')"));
   for (let i = 0; i < all.length; i += 250) await db.batch(all.slice(i, i + 250));
@@ -429,15 +454,121 @@ async function updateRefuel(env, ts, body) {
 async function listTrips(env, limit) {
   const { results } = await env.DB.prepare(
     `SELECT id, start_ts, end_ts, km, duration_s, avg_speed, max_speed, max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l
-     FROM trips ORDER BY start_ts DESC LIMIT ?`
+     , points FROM trips ORDER BY start_ts DESC LIMIT ?`
   ).bind(limit).all();
-  return { trips: results };
+  return {
+    trips: results.map(({ points, ...t }) => {
+      const sp = JSON.parse(points || '[]').map(p => p[2]);
+      const n = 16, spark = [];
+      if (sp.length > 1) for (let i = 0; i < n; i++) spark.push(sp[Math.round(i * (sp.length - 1) / (n - 1))]);
+      return { ...t, spark };
+    })
+  };
 }
 
 async function getTrip(env, id) {
   const t = await env.DB.prepare('SELECT * FROM trips WHERE id = ?').bind(id).first();
   if (!t) throw httpError('Trayecto no encontrado', 404);
-  return { ...t, points: JSON.parse(t.points || '[]') };
+  let route = null;
+  if (t.start_lat != null && t.end_lat != null) {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n, AVG(duration_s) AS dur, MIN(duration_s) AS best, AVG(avg_speed) AS spd,
+        SUM(fuel_used_l) AS fuel, SUM(km) AS km FROM trips
+       WHERE id != ? AND round(start_lat, 2) = round(?, 2) AND round(start_lon, 2) = round(?, 2)
+         AND round(end_lat, 2) = round(?, 2) AND round(end_lon, 2) = round(?, 2)`
+    ).bind(id, t.start_lat, t.start_lon, t.end_lat, t.end_lon).first();
+    if (r && r.n) route = { count: r.n, avg_duration_s: Math.round(r.dur), best_duration_s: r.best, avg_speed: Math.round(r.spd), avg_l100: r.km ? round(r.fuel / r.km * 100, 1) : null };
+  }
+  return { ...t, points: JSON.parse(t.points || '[]'), route };
+}
+
+async function tripRecords(env) {
+  const cols = 'id, start_ts, km, duration_s, avg_speed, max_speed, max_rpm, fuel_used_l';
+  const q = sql => env.DB.prepare(sql).first();
+  const [top, eff, longest, rpm] = await Promise.all([
+    q(`SELECT ${cols} FROM trips ORDER BY max_speed DESC LIMIT 1`),
+    q(`SELECT ${cols}, fuel_used_l / km * 100 AS l100 FROM trips WHERE km >= 5 AND fuel_used_l > 0 ORDER BY l100 ASC LIMIT 1`),
+    q(`SELECT ${cols} FROM trips ORDER BY km DESC LIMIT 1`),
+    q(`SELECT ${cols} FROM trips ORDER BY max_rpm DESC LIMIT 1`)
+  ]);
+  if (eff) eff.l100 = round(eff.l100, 1);
+  return { top_speed: top, best_eff: eff, longest, top_rpm: rpm };
+}
+
+async function weeklySummary(env) {
+  const from = Date.now() - 7 * 86400e3;
+  const t = await env.DB.prepare('SELECT COUNT(*) AS n, SUM(km) AS km, SUM(fuel_used_l) AS fuel, MAX(max_speed) AS top FROM trips WHERE start_ts >= ?').bind(from).first();
+  const r = await env.DB.prepare('SELECT SUM(price_total) AS eur, COUNT(*) AS n FROM refuels WHERE ts >= ?').bind(from).first();
+  const { items } = await listMaint(env);
+  const due = items.filter(i => i.status === 'vencido' || i.status === 'pronto').length;
+  const parts = [`${fmt(t.km || 0)} km en ${t.n || 0} trayectos`];
+  if (t.km > 20 && t.fuel) parts.push(`${fmt(t.fuel / t.km * 100, 1)} l/100 km`);
+  if (r.eur) parts.push(`${fmt(r.eur, 2)} € en gasolina`);
+  if (t.top) parts.push(`punta ${t.top} km/h`);
+  parts.push(due ? `${due} tarea${due > 1 ? 's' : ''} de taller pendiente${due > 1 ? 's' : ''}` : 'todo al día en el taller');
+  return { title: 'Tu semana con el ST', body: parts.join(' · '), url: '#viajes', tag: 'weekly' };
+}
+
+// ---------- Gasolineras (datos oficiales del Ministerio) ----------
+
+function distKm(a, b, c, d) {
+  const R = 6371, r = x => x * Math.PI / 180;
+  const h = Math.sin(r(c - a) / 2) ** 2 + Math.cos(r(a)) * Math.cos(r(c)) * Math.sin(r(d - b) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function fuelStations(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_cache'").first();
+  if (row) {
+    const c = JSON.parse(row.v);
+    if (Date.now() - c.at < 3600e3) return c;
+  }
+  let res;
+  try {
+    res = await fetch(FUEL_API + (env.PROVINCE || '43'), {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (FiestaSTGaraje)' },
+      cf: { cacheTtl: 1800 }
+    });
+  } catch (e) { res = null; }
+  if (!res || !res.ok) {
+    if (row) return JSON.parse(row.v);
+    throw httpError('El servicio de precios del Ministerio no responde ahora mismo', 502);
+  }
+  const j = await res.json();
+  const n = v => { const x = parseFloat(String(v || '').replace(',', '.')); return isNaN(x) ? null : x; };
+  const list = (j.ListaEESSPrecio || []).map(s => ({
+    id: s.IDEESS,
+    name: String(s['Rótulo'] || 'Gasolinera').trim(),
+    address: String(s['Dirección'] || '').trim(),
+    town: String(s.Localidad || s.Municipio || '').trim(),
+    hours: s.Horario || '',
+    lat: n(s.Latitud), lon: n(s['Longitud (WGS84)']),
+    p95: n(s[FUEL_FIELDS['95']]), p98: n(s[FUEL_FIELDS['98']])
+  })).filter(s => s.lat && s.lon && (s.p95 || s.p98));
+  if (!list.length) throw httpError('El Ministerio no ha devuelto gasolineras', 502);
+  const c = { at: Date.now(), date: j.Fecha || null, list };
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fuel_cache', ?)").bind(JSON.stringify(c)).run();
+  return c;
+}
+
+async function nearbyFuel(env, qs) {
+  const type = qs.get('type') === '95' ? '95' : '98';
+  let lat = parseFloat(qs.get('lat')), lon = parseFloat(qs.get('lon'));
+  if (isNaN(lat) || isNaN(lon)) {
+    const last = await env.DB.prepare('SELECT data FROM snapshots ORDER BY ts DESC LIMIT 1').first();
+    const loc = last && JSON.parse(last.data).location;
+    if (!loc) throw httpError('No hay ubicación para buscar gasolineras', 400);
+    lat = loc.lat; lon = loc.lon;
+  }
+  const radius = Math.min(30, Math.max(1, parseFloat(qs.get('radius')) || 10));
+  const { date, list } = await fuelStations(env);
+  const key = 'p' + type;
+  const near = list.map(s => ({ ...s, km: round(distKm(lat, lon, s.lat, s.lon), 1), price: s[key] }))
+    .filter(s => s.price && s.km <= radius);
+  const byPrice = near.slice().sort((a, b) => a.price - b.price || a.km - b.km);
+  const nearest = near.slice().sort((a, b) => a.km - b.km)[0] || null;
+  const avg = near.length ? round(near.reduce((s, x) => s + x.price, 0) / near.length, 3) : null;
+  return { type, date, radius_km: radius, count: near.length, avg, nearest, stations: byPrice.slice(0, 12) };
 }
 
 async function currentOdo(env) {
