@@ -41,6 +41,8 @@ export default {
       if (m === 'POST' && p === '/api/ford/connect') return json(await fordConnect(env, await req.json()));
       if (m === 'POST' && p === '/api/ford/refresh') return json(await fordRefresh(env));
       if (m === 'GET' && p === '/api/ford/status') return json(await fordStatus(env));
+      if (m === 'GET' && p === '/api/track') return json(await getTrack(env));
+      if (m === 'POST' && p === '/api/track') return json(await setTrack(env, await req.json()));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
       if (m === 'POST' && p === '/api/guard') return json(await setGuard(env, await req.json()));
       if (m === 'GET' && p === '/api/parking') return json(await getParking(env));
@@ -83,7 +85,9 @@ export default {
 
 async function readCar(env) {
   const car = src(env) === 'ford' ? await fordCar(env) : mockCar(Date.now());
-  car.alerts = Object.values(carAlerts(car));
+  const track = await getTrack(env);
+  car.track = track.active ? track : null;
+  car.alerts = Object.entries(carAlerts(car)).filter(([k]) => !(track.active && k.startsWith('tyre_'))).map(([, v]) => v);
   return car;
 }
 
@@ -442,7 +446,7 @@ function processCar(db, st, c, opts = {}) {
       }
       st.trip = {
         start_ts: c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c ?? c.coolant_c,
-        start: c.location ? [c.location.lat, c.location.lon] : null,
+        start: c.location ? [c.location.lat, c.location.lon] : null, track: !!c.track,
         pts: [], n: 0, spd: 0, thr: 0, hi: 0, max_speed: 0, max_rpm: 0, max_oil: 0, warm: false
       };
     }
@@ -476,11 +480,11 @@ function processCar(db, st, c, opts = {}) {
       if (c.location) pts.push([c.location.lat, c.location.lon, 0, c.ts]);
       const end = c.location ? [c.location.lat, c.location.lon] : t.end;
       stmts.push(db.prepare(`INSERT INTO trips (start_ts, end_ts, start_odo, end_odo, km, duration_s, avg_speed, max_speed,
-          max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l, start_lat, start_lon, end_lat, end_lon, points)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l, start_lat, start_lon, end_lat, end_lon, points, track)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(t.start_ts, t.end_ts, t.start_odo, endOdo, km, dur, Math.round(km / (dur / 3600)), t.max_speed,
           t.max_rpm, t.max_oil, Math.round(t.thr / t.n), Math.round((t.hi / t.n) * 100), round(usedL, 2),
-          t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts)));
+          t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts), t.track || c.track ? 1 : 0));
     }
     st.trip = null;
     if (c.location) st.parked = { ts: c.ts, lat: c.location.lat, lon: c.location.lon };
@@ -496,6 +500,7 @@ function processCar(db, st, c, opts = {}) {
     st.unlockedSince = st.unlockedSince || c.ts;
     if (c.ts - st.unlockedSince < UNLOCKED_GRACE_S * 1000) delete cur.unlocked;
   } else st.unlockedSince = null;
+  if (c.track) for (const k in cur) if (k.startsWith('tyre_')) delete cur[k];
   for (const k in cur) {
     if (!st.alerts.includes(k)) notes.push({ title: 'Fiesta ST', body: cur[k], url: '#estado', tag: k });
   }
@@ -598,6 +603,7 @@ async function prepare(env) {
     db.prepare('CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, sub TEXT, created INTEGER)'),
     db.prepare("INSERT OR REPLACE INTO kv VALUES ('schema', ?)").bind(SCHEMA)
   ]);
+  try { await db.prepare('ALTER TABLE trips ADD COLUMN track INTEGER DEFAULT 0').run(); } catch (e) { /* ya existe */ }
   const mc = await db.prepare('SELECT COUNT(*) AS n FROM maintenance').first();
   if (!mc.n) {
     await db.batch(DEFAULT_MAINT.map(([n, km, mo]) =>
@@ -712,8 +718,8 @@ async function updateRefuel(env, ts, body) {
 
 async function listTrips(env, limit) {
   const { results } = await env.DB.prepare(
-    `SELECT id, start_ts, end_ts, km, duration_s, avg_speed, max_speed, max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l
-     , points FROM trips ORDER BY start_ts DESC LIMIT ?`
+    `SELECT id, start_ts, end_ts, km, duration_s, avg_speed, max_speed, max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l,
+     track, points FROM trips ORDER BY start_ts DESC LIMIT ?`
   ).bind(limit).all();
   const price = await priceFinder(env);
   return {
@@ -734,7 +740,7 @@ async function getTrip(env, id) {
     const r = await env.DB.prepare(
       `SELECT COUNT(*) AS n, AVG(duration_s) AS dur, MIN(duration_s) AS best, AVG(avg_speed) AS spd,
         SUM(fuel_used_l) AS fuel, SUM(km) AS km FROM trips
-       WHERE id != ? AND round(start_lat, 2) = round(?, 2) AND round(start_lon, 2) = round(?, 2)
+       WHERE id != ? AND COALESCE(track, 0) = 0 AND round(start_lat, 2) = round(?, 2) AND round(start_lon, 2) = round(?, 2)
          AND round(end_lat, 2) = round(?, 2) AND round(end_lon, 2) = round(?, 2)`
     ).bind(id, t.start_lat, t.start_lon, t.end_lat, t.end_lon).first();
     if (r && r.n) route = { count: r.n, avg_duration_s: Math.round(r.dur), best_duration_s: r.best, avg_speed: Math.round(r.spd), avg_l100: r.km ? round(r.fuel / r.km * 100, 1) : null };
@@ -766,6 +772,24 @@ async function priceFinder(env) {
 }
 
 // ---------- Vigilancia y aparcamiento ----------
+
+async function getTrack(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'track'").first();
+  const t = row ? JSON.parse(row.v) : {};
+  return { until: t.until || null, active: !!(t.until && t.until > Date.now()) };
+}
+
+async function setTrack(env, b) {
+  let until = null;
+  if (b.until === 'midnight') {
+    const d = new Date(Date.now() + 3600e3);
+    d.setUTCHours(23, 59, 0, 0);
+    until = d.getTime() - 3600e3;
+  } else if (Number(b.hours) > 0 && Number(b.hours) <= 24) until = Date.now() + Number(b.hours) * 3600e3;
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('track', ?)").bind(JSON.stringify({ until })).run();
+  await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
+  return getTrack(env);
+}
 
 async function getGuard(env) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'guard'").first();
@@ -835,10 +859,10 @@ async function tripRecords(env) {
   const cols = 'id, start_ts, km, duration_s, avg_speed, max_speed, max_rpm, fuel_used_l';
   const q = sql => env.DB.prepare(sql).first();
   const [top, eff, longest, rpm] = await Promise.all([
-    q(`SELECT ${cols} FROM trips ORDER BY max_speed DESC LIMIT 1`),
-    q(`SELECT ${cols}, fuel_used_l / km * 100 AS l100 FROM trips WHERE km >= 5 AND fuel_used_l > 0 ORDER BY l100 ASC LIMIT 1`),
-    q(`SELECT ${cols} FROM trips ORDER BY km DESC LIMIT 1`),
-    q(`SELECT ${cols} FROM trips ORDER BY max_rpm DESC LIMIT 1`)
+    q(`SELECT ${cols} FROM trips WHERE COALESCE(track, 0) = 0 ORDER BY max_speed DESC LIMIT 1`),
+    q(`SELECT ${cols}, fuel_used_l / km * 100 AS l100 FROM trips WHERE COALESCE(track, 0) = 0 AND km >= 5 AND fuel_used_l > 0 ORDER BY l100 ASC LIMIT 1`),
+    q(`SELECT ${cols} FROM trips WHERE COALESCE(track, 0) = 0 ORDER BY km DESC LIMIT 1`),
+    q(`SELECT ${cols} FROM trips WHERE COALESCE(track, 0) = 0 ORDER BY max_rpm DESC LIMIT 1`)
   ]);
   if (eff) eff.l100 = round(eff.l100, 1);
   return { top_speed: top, best_eff: eff, longest, top_rpm: rpm };

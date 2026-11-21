@@ -347,6 +347,7 @@ function viewEstado(c) {
   return `
   ${stale ? `<div class="pn pad row" style="gap:10px"><div class="col" style="gap:2px;min-width:0"><span class="k">Último dato del coche</span><span style="font-size:14px">${hm(c.data_ts)} · ${ago(c.data_ts)}. El coche está dormido.</span></div>
     <button class="btn" id="refreshCar" style="min-height:44px;padding:0 12px;flex:none">Actualizar</button></div>` : ''}
+  ${c.track ? `<button class="pn pad row" data-go="motor" style="width:100%;text-align:left"><span class="k" style="color:${C.ac}">Modo circuito activo</span><span style="font-size:13px;color:#7d858f">hasta las ${hm(c.track.until)} · sin avisos de presión</span></button>` : ''}
   ${(c.alerts || []).map(a => `<div class="alert">${esc(a)}${stale ? ` <span style="font-weight:500;opacity:.75">(dato de las ${hm(c.data_ts)})</span>` : ''}</div>`).join('')}
   <div class="pn" style="padding:16px 18px;display:flex;align-items:center;gap:16px">
     ${fuelArc(c.fuel_pct)}
@@ -425,6 +426,12 @@ function viewMotor(c) {
     <span class="k">Gas</span><div class="bar"><div style="width:${running ? c.throttle_pct : 0}%;background:${C.ok};transition:width .4s"></div></div><span class="m" style="font-size:14px;font-weight:600;min-width:38px;text-align:right">${running ? nf(c.throttle_pct) + '%' : '—'}</span>
     <span class="k">Freno</span><div class="bar"><div style="width:${running ? c.brake_pct : 0}%;background:${C.bad};transition:width .4s"></div></div><span class="m" style="font-size:14px;font-weight:600;min-width:38px;text-align:right">${running ? nf(c.brake_pct) + '%' : '—'}</span>
   </div>
+  <div class="pn pad col" style="gap:10px">
+    <div class="row"><span class="k">Modo circuito</span>${c.track ? `<span class="tag" style="color:${C.ac};border-color:#4a4210">Activo hasta las ${hm(c.track.until)}</span>` : ''}</div>
+    <span style="font-size:13px;color:#7d858f">Sin avisos de presión, y los trayectos se guardan aparte de tus récords.</span>
+    ${c.track ? '<button class="btn sec" data-track="off">Desactivar</button>'
+      : '<div class="btns"><button class="btn sec" data-track="midnight">Hasta medianoche</button><button class="btn sec" data-track="4">4 horas</button></div>'}
+  </div>
   <button class="btn sec" id="driveBtn">Abrir modo conducción</button>`;
 }
 
@@ -452,7 +459,7 @@ function viewViajes() {
     if (d !== day) { flush(); day = d; group = ''; }
     group += `<button class="li" data-trip="${t.id}" style="grid-template-columns:34px 1fr 92px">
       <span class="m" style="font-size:13px;color:#7d858f;font-weight:600">#${pad2(t.id)}</span>
-      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)} · máx. ${nf(t.max_speed)}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
+      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}${t.track ? ` <span class="tag" style="color:${C.ac};border-color:#4a4210;font-size:10px">Circuito</span>` : ''}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)} · máx. ${nf(t.max_speed)}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
       <span class="col" style="gap:4px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${nf(t.km, 1)} km</span>${spark(t.spark)}</span>
     </button>`;
   }
@@ -758,6 +765,14 @@ function afterRender() {
     if (!parking) { try { parking = await api('/api/parking'); } catch (e) { error = e.message; render(); return; } }
     sheet = { type: 'parking' }; render();
   };
+  document.querySelectorAll('[data-track]').forEach(b => b.onclick = async () => {
+    const v = b.dataset.track;
+    try {
+      await api('/api/track', { method: 'POST', body: JSON.stringify(v === 'off' ? { until: null } : v === 'midnight' ? { until: 'midnight' } : { hours: +v }) });
+      flash(v === 'off' ? 'Modo circuito desactivado' : 'Modo circuito activado');
+      loadLive();
+    } catch (e) { error = e.message; render(); }
+  });
   const rc = $('#refreshCar'); if (rc) rc.onclick = async () => {
     rc.disabled = true; rc.textContent = 'Pidiendo…';
     try {
