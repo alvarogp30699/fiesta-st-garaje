@@ -14,15 +14,48 @@ const TYRE_MIN = 2.2, BATT_MIN = 12.2, FUEL_MIN = 12, OIL_WARM = 80;
 const FUEL_API = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/FiltroProvincia/';
 const FUEL_FIELDS = { '95': 'Precio Gasolina 95 E5', '98': 'Precio Gasolina 98 E5' };
 const PUSH_SUBJECT = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
-// Circuitos conocidos: centro aproximado del recinto y radio en km.
+// Circuitos conocidos: centro del recinto y radio en km (o rectángulo "box" para la Nordschleife).
+// approx: ubicación sacada de la dirección, no de coordenadas publicadas.
 const CIRCUITS = [
   { id: 'albacete', name: 'Circuito de Albacete', lat: 39.00782, lon: -1.79590, r: 1.0 },
-  { id: 'motorland', name: 'MotorLand Aragón', lat: 41.0755, lon: -0.1980, r: 1.9 }
+  { id: 'motorland', name: 'MotorLand Aragón', lat: 41.0755, lon: -0.1980, r: 1.9 },
+  { id: 'jarama', name: 'Circuito del Jarama', lat: 40.61711, lon: -3.58558, r: 0.9 },
+  { id: 'montmelo', name: 'Circuit de Barcelona-Catalunya', lat: 41.5700, lon: 2.2611, r: 1.5 },
+  { id: 'cheste', name: 'Circuit Ricardo Tormo (Cheste)', lat: 39.48583, lon: -0.62806, r: 1.2 },
+  { id: 'navarra', name: 'Circuito de Navarra', lat: 42.56106, lon: -2.16361, r: 1.3 },
+  { id: 'jerez', name: 'Circuito de Jerez', lat: 36.70833, lon: -6.03417, r: 1.3 },
+  { id: 'almeria', name: 'Circuito de Almería', lat: 37.0899, lon: -2.2719, r: 2.0 },
+  { id: 'guadix', name: 'Circuito de Guadix', lat: 37.40167, lon: -3.07472, r: 1.2 },
+  { id: 'monteblanco', name: 'Circuito Monteblanco', lat: 37.35917, lon: -6.56565, r: 1.5 },
+  { id: 'calafat', name: 'Circuit de Calafat', lat: 40.93389, lon: 0.84167, r: 1.0 },
+  { id: 'cartagena', name: 'Circuito de Cartagena', lat: 37.64556, lon: -1.03626, r: 1.0 },
+  { id: 'parcmotor', name: 'Parcmotor Castellolí', lat: 41.5902, lon: 1.69077, r: 1.3 },
+  { id: 'ascari', name: 'Ascari Race Resort', lat: 36.82556, lon: -5.08361, r: 1.5 },
+  { id: 'alcarras', name: "Circuit d'Alcarràs", lat: 41.575, lon: 0.500, r: 3.5, approx: true },
+  { id: 'kotarr', name: 'Circuito Kotarr', lat: 41.800, lon: -3.570, r: 3.0, approx: true },
+  { id: 'mallorca', name: 'Circuit Mallorca (Llucmajor)', lat: 39.505, lon: 2.850, r: 3.5, approx: true },
+  // Nürburgring: GP-Strecke por radio y Nordschleife por rectángulo (el lazo de 20,8 km)
+  { id: 'nring-gp', group: 'nring', name: 'Nürburgring GP-Strecke', lat: 50.3330, lon: 6.9440, r: 1.1 },
+  { id: 'nring-nords', group: 'nring', name: 'Nürburgring Nordschleife', box: [50.336, 6.905, 50.388, 7.022] }
 ];
+let CUSTOM_CIRCUITS = []; // añadidos desde la app ("Guardar este circuito"), se cargan en prepare()
+function inCircuit(c, loc) {
+  if (c.box) return loc.lat >= c.box[0] && loc.lat <= c.box[2] && loc.lon >= c.box[1] && loc.lon <= c.box[3];
+  return distKm(loc.lat, loc.lon, c.lat, c.lon) <= c.r;
+}
 function circuitAt(loc) {
   if (!loc || loc.lat == null) return null;
-  return CIRCUITS.find(c => distKm(loc.lat, loc.lon, c.lat, c.lon) <= c.r) || null;
+  return [...CUSTOM_CIRCUITS, ...CIRCUITS].find(c => inCircuit(c, loc)) || null;
 }
+// Nombre final de una sesión según las zonas recorridas (variantes del Nürburgring)
+function sessionName(zones, fallback) {
+  const z = new Set(zones || []);
+  if (z.has('nring-gp') && z.has('nring-nords')) return 'Nürburgring 24h (GP + Nordschleife)';
+  if (z.has('nring-nords')) return 'Nürburgring Nordschleife';
+  if (z.has('nring-gp')) return 'Nürburgring GP-Strecke';
+  return fallback;
+}
+const CIRCUIT_MIN_SHARE = 0.5; // para etiquetar un trayecto como circuito, al menos la mitad de los puntos dentro
 const TYRE_NAMES = { fl: 'delantera izquierda', fr: 'delantera derecha', rl: 'trasera izquierda', rr: 'trasera derecha' };
 const DEFAULT_MAINT = [
   ['Aceite y filtro', 15000, 12],
@@ -51,6 +84,8 @@ export default {
       if (m === 'POST' && p === '/api/ford/refresh') return json(await fordRefresh(env));
       if (m === 'GET' && p === '/api/ford/status') return json(await fordStatus(env));
       if (m === 'GET' && p === '/api/circuits') return json(await circuitStats(env));
+      if (m === 'POST' && p === '/api/circuits/custom') return json(await addCustomCircuit(env, await req.json()));
+      if (m === 'DELETE' && p.startsWith('/api/circuits/custom/')) return json(await delCustomCircuit(env, decodeURIComponent(p.slice(21))));
       if (m === 'GET' && p === '/api/track') return json(await getTrack(env));
       if (m === 'POST' && p === '/api/track') return json(await setTrack(env, await req.json()));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
@@ -492,12 +527,13 @@ function processCar(db, st, c, opts = {}) {
       const pts = t.pts.slice();
       if (c.location) pts.push([c.location.lat, c.location.lon, 0, c.ts]);
       const end = c.location ? [c.location.lat, c.location.lon] : t.end;
+      const sess = tripCircuit(t, pts, c);
       stmts.push(db.prepare(`INSERT INTO trips (start_ts, end_ts, start_odo, end_odo, km, duration_s, avg_speed, max_speed,
           max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l, start_lat, start_lon, end_lat, end_lon, points, track, circuit)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(t.start_ts, t.end_ts, t.start_odo, endOdo, km, dur, Math.round(km / (dur / 3600)), t.max_speed,
           t.max_rpm, t.max_oil, Math.round(t.thr / t.n), Math.round((t.hi / t.n) * 100), round(usedL, 2),
-          t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts), t.track || c.track ? 1 : 0, t.circuit || (pts.map(p => circuitAt({ lat: p[0], lon: p[1] })).find(Boolean) || {}).name || null));
+          t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts), sess.track ? 1 : 0, sess.circuit));
     }
     st.trip = null;
     if (c.location) st.parked = { ts: c.ts, lat: c.location.lat, lon: c.location.lon };
@@ -508,12 +544,20 @@ function processCar(db, st, c, opts = {}) {
   if (running) st.movedAlerted = false;
 
   // Llegada / salida de un circuito
+  // Solo cuenta si se queda dentro: aparcado en el recinto o 5 lecturas seguidas en marcha (no al pasar por al lado).
   const circ = circuitAt(c.location);
-  if (circ && st.circuit !== circ.id && !opts.silent) {
-    notes.push({ title: '🏁 ' + circ.name, body: 'Modo circuito activado: sin avisos de presión y trayectos guardados como circuito.', url: '#viajes', tag: 'circuit' });
+  const key = circ ? (circ.group || circ.id) : null;
+  st.circuitPolls = key && key === st.circuitKey ? (st.circuitPolls || 0) + 1 : key ? 1 : 0;
+  st.circuitKey = key;
+  const settled = circ && (!running || st.circuitPolls >= 5);
+  if (settled && st.circuit !== key && !opts.silent) {
+    notes.push({ title: '🏁 ' + (circ.group === 'nring' ? 'Nürburgring' : circ.name), body: 'Modo circuito activado: sin avisos de presión y trayectos guardados como circuito.', url: '#viajes', tag: 'circuit' });
   }
-  st.circuit = circ ? circ.id : null;
-  if (circ && st.trip) { st.trip.track = true; st.trip.circuit = circ.name; }
+  if (settled) st.circuit = key; else if (!circ) st.circuit = null;
+  if (circ && st.trip) {
+    st.trip.zones = [...new Set([...(st.trip.zones || []), circ.id])];
+    st.trip.circuit = circ.group ? null : circ.name;
+  }
 
   // Avisos (solo cuando aparecen)
   const cur = carAlerts(c);
@@ -594,10 +638,13 @@ let ready = false, SRC = null;
 function src(env) { return SRC || env.SOURCE || 'mock'; }
 async function prepare(env) {
   const db = env.DB;
-  const [, srcRow] = await db.batch([
+  const [, srcRow, ccRes] = await db.batch([
     db.prepare('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)'),
-    db.prepare("SELECT v FROM kv WHERE k = 'source'")
+    db.prepare("SELECT v FROM kv WHERE k = 'source'"),
+    db.prepare("SELECT v FROM kv WHERE k = 'custom_circuits'")
   ]);
+  const ccRow = ccRes;
+  try { CUSTOM_CIRCUITS = JSON.parse((ccRow && ccRow.results[0] && ccRow.results[0].v) || '[]'); } catch (e) { CUSTOM_CIRCUITS = []; }
   const s = (srcRow.results && srcRow.results[0] && srcRow.results[0].v) || env.SOURCE || 'mock';
   if (ready && s === SRC) return;
   SRC = s;
@@ -795,6 +842,40 @@ async function priceFinder(env) {
 
 // ---------- Vigilancia y aparcamiento ----------
 
+function tripCircuit(t, pts, c) {
+  const inside = pts.map(p => circuitAt({ lat: p[0], lon: p[1] }));
+  const hits = inside.filter(Boolean);
+  const manual = !!(t.track || c.track) && !(c.track && c.track.auto);
+  if (!hits.length || hits.length / pts.length < CIRCUIT_MIN_SHARE) return { track: manual, circuit: null };
+  const zones = [...new Set(hits.map(h => h.id))];
+  const counts = {};
+  for (const h of hits) counts[h.name] = (counts[h.name] || 0) + 1;
+  const main = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+  return { track: true, circuit: sessionName(zones, main) };
+}
+
+async function saveCustom(env) {
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('custom_circuits', ?)").bind(JSON.stringify(CUSTOM_CIRCUITS)).run();
+  await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
+  return { custom: CUSTOM_CIRCUITS };
+}
+
+// Guarda la ubicación actual del coche como circuito (para los que no están en la lista).
+async function addCustomCircuit(env, b) {
+  const car = await readCar(env);
+  if (!car.location) return { error: 'No hay ubicación del coche' };
+  const name = String(b.name || '').trim().slice(0, 40) || 'Circuito';
+  const r = Math.min(3, Math.max(0.5, Number(b.r) || 1.2));
+  CUSTOM_CIRCUITS = CUSTOM_CIRCUITS.filter(c => distKm(c.lat, c.lon, car.location.lat, car.location.lon) > 0.5);
+  CUSTOM_CIRCUITS.push({ id: 'custom-' + Date.now(), name, lat: round(car.location.lat, 5), lon: round(car.location.lon, 5), r });
+  return saveCustom(env);
+}
+
+async function delCustomCircuit(env, id) {
+  CUSTOM_CIRCUITS = CUSTOM_CIRCUITS.filter(c => c.id !== id);
+  return saveCustom(env);
+}
+
 async function circuitStats(env) {
   const { results } = await env.DB.prepare(
     `SELECT circuit, COUNT(*) AS sessions, COUNT(DISTINCT date((start_ts + 3600000) / 1000, 'unixepoch')) AS days,
@@ -802,7 +883,7 @@ async function circuitStats(env) {
       SUM(duration_s) AS secs, MAX(start_ts) AS last_ts
      FROM trips WHERE circuit IS NOT NULL GROUP BY circuit ORDER BY last_ts DESC`
   ).all();
-  return { circuits: results, known: CIRCUITS.map(c => c.name) };
+  return { circuits: results, known: CIRCUITS.map(c => c.name), custom: CUSTOM_CIRCUITS };
 }
 
 async function getTrack(env) {

@@ -127,7 +127,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null;
+let driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -177,7 +177,7 @@ async function loadFor(t, force) {
   if (t === 'viajes') {
     add('trips', 60e3, async () => { trips = (await api('/api/trips?limit=60')).trips; });
     add('records', 300e3, async () => { records = await api('/api/trips/records'); });
-    add('circuits', 300e3, async () => { circuits = (await api('/api/circuits')).circuits; });
+    add('circuits', 300e3, async () => { const r = await api('/api/circuits'); circuits = r.circuits; customCircuits = r.custom || []; });
   }
   if (t === 'datos') add('datos', 120e3, async () => { [hist, refuels] = await Promise.all([api('/api/history?days=7'), api('/api/refuels')]); });
   if (!jobs.length) return;
@@ -429,9 +429,11 @@ function viewMotor(c) {
   </div>
   <div class="pn pad col" style="gap:10px">
     <div class="row"><span class="k">Modo circuito</span>${c.track ? `<span class="tag" style="color:${C.ac};border-color:#4a4210">${c.track.auto ? esc(c.track.circuit) : 'Activo hasta las ' + hm(c.track.until)}</span>` : ''}</div>
-    <span style="font-size:13px;color:#7d858f">Se activa solo en Albacete y MotorLand. Sin avisos de presión, y los trayectos se guardan aparte de tus récords.</span>
+    <span style="font-size:13px;color:#7d858f">Se activa solo en los circuitos de España y en el Nürburgring (GP, Nordschleife o las dos juntas). Sin avisos de presión, y los trayectos se guardan aparte de tus récords.</span>
     ${c.track && c.track.auto ? '' : c.track ? '<button class="btn sec" data-track="off">Desactivar</button>'
       : '<div class="btns"><button class="btn sec" data-track="midnight">Hasta medianoche</button><button class="btn sec" data-track="4">4 horas</button></div>'}
+    ${c.track && c.track.auto ? '' : '<button class="btn sec" id="addCircuit">📍 Estoy en un circuito que no conoce: guardarlo</button>'}
+    ${customCircuits.map(cc => `<div class="row"><span style="font-size:14px">📍 ${esc(cc.name)}</span><button class="btn sec" style="padding:4px 10px;min-height:0" data-delcircuit="${esc(cc.id)}">Quitar</button></div>`).join('')}
   </div>
   <button class="btn sec" id="driveBtn">Abrir modo conducción</button>`;
 }
@@ -782,6 +784,20 @@ function afterRender() {
       flash(v === 'off' ? 'Modo circuito desactivado' : 'Modo circuito activado');
       loadLive();
     } catch (e) { error = e.message; render(); }
+  });
+  const ac = $('#addCircuit'); if (ac) ac.onclick = async () => {
+    const name = prompt('Nombre del circuito (se guarda la ubicación actual del coche):');
+    if (!name) return;
+    try {
+      const r = await api('/api/circuits/custom', { method: 'POST', body: JSON.stringify({ name }) });
+      if (r.error) throw new Error(r.error);
+      customCircuits = r.custom; flash('Circuito guardado: se detectará solo a partir de ahora'); loadLive();
+    } catch (e) { error = e.message; render(); }
+  };
+  document.querySelectorAll('[data-delcircuit]').forEach(b => b.onclick = async () => {
+    if (!confirm('¿Quitar este circuito?')) return;
+    try { customCircuits = (await api('/api/circuits/custom/' + encodeURIComponent(b.dataset.delcircuit), { method: 'DELETE' })).custom; render(); loadLive(); }
+    catch (e) { error = e.message; render(); }
   });
   const rc = $('#refreshCar'); if (rc) rc.onclick = async () => {
     rc.disabled = true; rc.textContent = 'Pidiendo…';
