@@ -195,14 +195,32 @@ function mapTelemetry(data) {
   const r1 = x => (x == null ? null : Math.round(x * 10) / 10);
   const ign = String(val('ignitionStatus') ?? 'OFF').toUpperCase();
   const running = !/OFF|LOCK/.test(ign) && /RUN|ON|START/.test(ign);
-  const tyres = {};
+  const WHEEL = { FRONT_LEFT: 'fl', FRONT_RIGHT: 'fr', REAR_LEFT: 'rl', REAR_RIGHT: 'rr' };
+  const tyres = {}, tyre_ref = {}, tyres_low = [];
   for (const t of Array.isArray(m.tirePressure) ? m.tirePressure : []) {
-    const k = { FRONT_LEFT: 'fl', FRONT_RIGHT: 'fr', REAR_LEFT: 'rl', REAR_RIGHT: 'rr' }[t.vehicleWheel];
-    if (k && t.value != null) tyres[k] = Math.round(num(t.value) / 100 * 100) / 100; // kPa → bar
+    const k = WHEEL[t.vehicleWheel];
+    if (!k || t.value == null) continue;
+    tyres[k] = Math.round(num(t.value)) / 100; // kPa → bar
+    const ref = num(t.wheelPlacardFront ?? t.wheelPlacardRear);
+    if (ref) tyre_ref[k] = Math.round(ref) / 100;
   }
+  for (const t of Array.isArray(m.tirePressureStatus) ? m.tirePressureStatus : []) {
+    const k = WHEEL[t.vehicleWheel];
+    if (k && /LOW/i.test(String(t.value))) tyres_low.push(k);
+  }
+  for (const k in tyres) if (!tyres_low.includes(k) && tyre_ref[k] && tyres[k] < tyre_ref[k] * 0.88) tyres_low.push(k);
+  const side = x => (x === 'DRIVER' ? 'izq.' : x === 'PASSENGER' ? 'der.' : '');
   const doors = Array.isArray(m.doorStatus) ? m.doorStatus : [];
-  const doors_open = doors.filter(d => d.value && !/CLOSED|UNKNOWN/i.test(String(d.value)))
-    .map(d => DOORS_ES[d.vehiclePart || d.vehicleDoor] || String(d.vehiclePart || d.vehicleDoor || 'puerta').toLowerCase());
+  const doors_open = doors.filter(d => d.value && !/CLOSED|UNKNOWN|UNDEFINED/i.test(String(d.value)))
+    .map(d => {
+      const p = d.vehiclePart || d.vehicleDoor;
+      if (p === 'UNSPECIFIED_FRONT') return 'puerta delantera ' + side(d.vehicleSide);
+      return DOORS_ES[p] || String(p || 'puerta').toLowerCase();
+    });
+  if (val('hoodStatus') && !/CLOSED|UNDEFINED/i.test(String(val('hoodStatus')))) doors_open.push('capó');
+  const windows_open = (Array.isArray(m.windowStatus) ? m.windowStatus : [])
+    .filter(w => { const r = w.value && w.value.doubleRange; return r ? num(r.upperBound) > 0 : w.value && !/CLOSED|UNDEFINED/i.test(String(w.value)); })
+    .map(w => 'ventana ' + (/REAR/.test(w.vehicleWindow) ? 'trasera ' : 'delantera ') + side(w.vehicleSide));
   let locked = null;
   const lk = m.doorLockStatus;
   if (Array.isArray(lk)) {
@@ -217,15 +235,20 @@ function mapTelemetry(data) {
     ts: Date.now(),
     source: 'ford',
     odometer_km: r1(num(val('odometer'))),
-    fuel_pct: r1(num(val('fuelLevel'))),
+    fuel_pct: num(val('fuelLevel')) != null ? r1(Math.min(100, num(val('fuelLevel')))) : null,
     range_km: num(val('fuelRange')) != null ? Math.round(num(val('fuelRange'))) : null,
     battery_v: num(val('batteryVoltage')) != null ? Math.round(num(val('batteryVoltage')) * 100) / 100 : null,
     tyres,
+    tyre_ref,
+    tyres_low,
     locked,
     doors_open,
-    windows_open: [],
+    windows_open,
     ignition: running ? 'run' : 'off',
     ignition_raw: ign,
+    battery_soc: num(val('batteryStateOfCharge')),
+    parking_brake: val('parkingBrakeStatus') ? /ON|ENGAGED/i.test(String(val('parkingBrakeStatus'))) : null,
+    alarm: val('alarmStatus') || null,
     speed_kmh: running ? Math.round(num(val('speed')) || 0) : 0,
     gear: running ? (GEARS[String(gearRaw).toUpperCase()] ?? gearRaw ?? null) : null,
     rpm: running ? Math.round(num(val('engineSpeed')) || 0) : 0,
@@ -337,7 +360,9 @@ function carAlerts(c) {
   const out = {};
   for (const k in c.tyres || {}) {
     const v = c.tyres[k];
-    if (v != null && v < TYRE_MIN) out['tyre_' + k] = `Presión baja en la rueda ${TYRE_NAMES[k] || k} (${fmt(v, 2)} bar)`;
+    const low = Array.isArray(c.tyres_low) ? c.tyres_low.includes(k) : v != null && v < TYRE_MIN;
+    const ref = c.tyre_ref && c.tyre_ref[k] ? `, recomendada ${fmt(c.tyre_ref[k], 2)}` : '';
+    if (low) out['tyre_' + k] = `Presión baja en la rueda ${TYRE_NAMES[k] || k} (${fmt(v, 2)} bar${ref})`;
   }
   if (!running && c.battery_v != null && c.battery_v < BATT_MIN) out.batt = `Batería de 12 V baja (${fmt(c.battery_v, 1)} V)`;
   if (!running && c.locked === false) out.unlocked = 'El coche está aparcado sin cerrar';
@@ -390,7 +415,7 @@ function processCar(db, st, c, opts = {}) {
         notes.push({ title: '⚠️ El coche se ha encendido', body: `Tu Fiesta ST se ha puesto en marcha a las ${hhmm(c.ts)}. Si no eres tú, revisa dónde está.`, url: '#estado', tag: 'guard', urgent: true });
       }
       st.trip = {
-        start_ts: c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c,
+        start_ts: c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c ?? c.coolant_c,
         start: c.location ? [c.location.lat, c.location.lon] : null,
         pts: [], n: 0, spd: 0, thr: 0, hi: 0, max_speed: 0, max_rpm: 0, max_oil: 0, warm: false
       };
@@ -402,16 +427,17 @@ function processCar(db, st, c, opts = {}) {
     if ((c.rpm || 0) >= 4000) t.hi++;
     t.max_speed = Math.max(t.max_speed, c.speed_kmh || 0);
     t.max_rpm = Math.max(t.max_rpm, c.rpm || 0);
-    t.max_oil = Math.max(t.max_oil, c.oil_c || 0);
+    t.max_oil = Math.max(t.max_oil, c.oil_c ?? c.coolant_c ?? 0);
     t.end_ts = c.ts; t.end_odo = c.odometer_km; t.end_fuel = c.fuel_pct;
     if (c.location) {
       t.end = [c.location.lat, c.location.lon];
       const lp = t.pts[t.pts.length - 1];
       if (!lp || c.ts - lp[3] >= POINT_GAP_S * 1000) t.pts.push([c.location.lat, c.location.lon, c.speed_kmh || 0, c.ts]);
     }
-    if (!t.warm && t.start_oil != null && t.start_oil < 60 && c.oil_c >= OIL_WARM) {
+    const warmT = c.oil_c ?? c.coolant_c, warmMax = c.oil_c != null ? OIL_WARM : 85;
+    if (!t.warm && t.start_oil != null && t.start_oil < 60 && warmT >= warmMax) {
       t.warm = true;
-      notes.push({ title: 'Motor a temperatura', body: `Aceite a ${c.oil_c} °C. Ya puedes apretar.`, url: '#motor', tag: 'warm' });
+      notes.push({ title: 'Motor a temperatura', body: `${c.oil_c != null ? 'Aceite' : 'Refrigerante'} a ${warmT} °C. Ya puedes apretar.`, url: '#motor', tag: 'warm' });
     }
   } else if (st.trip) {
     const t = st.trip;
@@ -463,7 +489,7 @@ async function ingest(env, car, st) {
   if (nr && nr.lat != null) {
     try {
       const type = env.FUEL_TYPE || '98';
-      const { list } = await fuelStations(env);
+      const { list } = await fuelStationsNear(env, nr.lat, nr.lon);
       const near = list.map(s => ({ ...s, km: distKm(nr.lat, nr.lon, s.lat, s.lon) })).filter(s => s.km < 0.35 && s['p' + type]).sort((a, b) => a.km - b.km)[0];
       if (near) {
         const price = near['p' + type];
@@ -695,7 +721,7 @@ const hhmm = ts => new Date(ts + 3600e3).toISOString().slice(11, 16);
 async function priceFinder(env) {
   const { results } = await env.DB.prepare('SELECT ts, price_total / litres AS pl FROM refuels WHERE price_total > 0 AND litres > 0 ORDER BY ts').all();
   let fallback = 1.70;
-  const fc = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_cache'").first();
+  const fc = await env.DB.prepare("SELECT v FROM kv WHERE k LIKE 'fuel_cache_%' LIMIT 1").first();
   if (fc) {
     const key = 'p' + (env.FUEL_TYPE || '98');
     const ps = JSON.parse(fc.v).list.map(s => s[key]).filter(Boolean);
@@ -809,15 +835,41 @@ function distKm(a, b, c, d) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-async function fuelStations(env) {
-  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_cache'").first();
+// Centro aproximado de cada provincia (código INE) para saber dónde buscar gasolineras.
+const PROVINCES = {
+  '01': [42.85, -2.67], '02': [38.83, -1.98], '03': [38.48, -0.57], '04': [37.17, -2.33], '05': [40.57, -4.93], '06': [38.71, -6.42],
+  '07': [39.57, 2.9], '08': [41.73, 1.98], '09': [42.37, -3.59], '10': [39.71, -6.16], '11': [36.55, -5.76], '12': [40.24, -0.15],
+  '13': [38.92, -3.82], '14': [37.99, -4.81], '15': [43.13, -8.43], '16': [39.9, -2.19], '17': [42.13, 2.67], '18': [37.31, -3.27],
+  '19': [40.82, -2.62], '20': [43.15, -2.2], '21': [37.57, -6.83], '22': [42.2, -0.07], '23': [37.96, -3.44], '24': [42.61, -5.84],
+  '25': [42.05, 1.05], '26': [42.28, -2.52], '27': [43.0, -7.56], '28': [40.5, -3.71], '29': [36.81, -4.72], '30': [38.0, -1.5],
+  '31': [42.67, -1.65], '32': [42.2, -7.59], '33': [43.29, -5.99], '34': [42.37, -4.53], '35': [28.4, -14.9], '36': [42.43, -8.46],
+  '37': [40.8, -6.06], '38': [28.29, -17.2], '39': [43.2, -4.03], '40': [41.17, -4.05], '41': [37.43, -5.68], '42': [41.62, -2.59],
+  '43': [41.06, 0.83], '44': [40.66, -0.82], '45': [39.79, -4.15], '46': [39.37, -0.79], '47': [41.63, -4.85], '48': [43.24, -2.85],
+  '49': [41.73, -6.0], '50': [41.62, -1.06], '51': [35.89, -5.32], '52': [35.29, -2.94]
+};
+function provincesNear(lat, lon, n = 2) {
+  return Object.entries(PROVINCES).map(([c, [a, b]]) => [c, distKm(lat, lon, a, b)]).sort((x, y) => x[1] - y[1]).slice(0, n).map(x => x[0]);
+}
+
+async function fuelStationsNear(env, lat, lon) {
+  const provs = provincesNear(lat, lon, 2);
+  const res = await Promise.allSettled(provs.map(p => fuelStations(env, p)));
+  const ok = res.filter(r => r.status === 'fulfilled').map(r => r.value);
+  if (!ok.length) throw res[0].reason;
+  return { date: ok[0].date, list: ok.flatMap(r => r.list) };
+}
+
+async function fuelStations(env, prov) {
+  prov = prov || env.PROVINCE || '43';
+  const ck = 'fuel_cache_' + prov;
+  const row = await env.DB.prepare('SELECT v FROM kv WHERE k = ?').bind(ck).first();
   if (row) {
     const c = JSON.parse(row.v);
     if (Date.now() - c.at < 3600e3) return c;
   }
   let res;
   try {
-    res = await fetch(FUEL_API + (env.PROVINCE || '43'), {
+    res = await fetch(FUEL_API + prov, {
       headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (FiestaSTGaraje)' },
       cf: { cacheTtl: 1800 }
     });
@@ -839,7 +891,7 @@ async function fuelStations(env) {
   })).filter(s => s.lat && s.lon && (s.p95 || s.p98));
   if (!list.length) throw httpError('El Ministerio no ha devuelto gasolineras', 502);
   const c = { at: Date.now(), date: j.Fecha || null, list };
-  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fuel_cache', ?)").bind(JSON.stringify(c)).run();
+  await env.DB.prepare('INSERT OR REPLACE INTO kv VALUES (?, ?)').bind(ck, JSON.stringify(c)).run();
   return c;
 }
 
@@ -853,7 +905,7 @@ async function nearbyFuel(env, qs) {
     lat = loc.lat; lon = loc.lon;
   }
   const radius = Math.min(30, Math.max(1, parseFloat(qs.get('radius')) || 10));
-  const { date, list } = await fuelStations(env);
+  const { date, list } = await fuelStationsNear(env, lat, lon);
   const key = 'p' + type;
   const near = list.map(s => ({ ...s, km: round(distKm(lat, lon, s.lat, s.lon), 1), price: s[key] }))
     .filter(s => s.price && s.km <= radius);

@@ -208,6 +208,7 @@ function dayLabel(ts) {
   return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric' });
 }
 const clock = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60; return h ? `${h}h${String(m).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`; };
+const tyreLow = (c, k) => Array.isArray(c.tyres_low) ? c.tyres_low.includes(k) : c.tyres && c.tyres[k] != null && c.tyres[k] < 2.2;
 const speedCol = v => v < 70 ? C.ac : v < 95 ? C.wa : C.bad;
 const pad2 = n => String(n).padStart(2, '0');
 
@@ -254,7 +255,7 @@ function spark(vals, w = 92, h = 18, col = C.ac, sw = 1.5) {
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="round"/></svg>`;
 }
 function carTop(c) {
-  const t = c.tyres || {}, col = v => v == null ? '#3a3f46' : v < 2.2 ? C.wa : C.ok;
+  const t = c.tyres || {}, col = k => t[k] == null ? '#3a3f46' : tyreLow(c, k) ? C.wa : C.ok;
   const open = [...(c.doors_open || []), ...(c.windows_open || [])].map(s => String(s).toLowerCase());
   const has = k => open.some(o => o.includes(k));
   const line = (x1, y1, x2, y2, k) => has(k) ? `<path d="M${x1} ${y1} L${x2} ${y2}" stroke="${C.bad}" stroke-width="4" stroke-linecap="round"/>` : '';
@@ -264,8 +265,8 @@ function carTop(c) {
     <rect x="34" y="102" width="52" height="54" rx="8" fill="#13161a" stroke="#23272c"/>
     <path d="M35 168 Q60 162 85 168 L90 186 Q60 196 30 186 Z" fill="#23272c"/>
     <rect x="40" y="10" width="40" height="5" rx="2" fill="${C.ac}" opacity=".8"/>
-    <rect x="8" y="38" width="12" height="36" rx="5" fill="${col(t.fl)}"/><rect x="100" y="38" width="12" height="36" rx="5" fill="${col(t.fr)}"/>
-    <rect x="8" y="152" width="12" height="36" rx="5" fill="${col(t.rl)}"/><rect x="100" y="152" width="12" height="36" rx="5" fill="${col(t.rr)}"/>
+    <rect x="8" y="38" width="12" height="36" rx="5" fill="${col('fl')}"/><rect x="100" y="38" width="12" height="36" rx="5" fill="${col('fr')}"/>
+    <rect x="8" y="152" width="12" height="36" rx="5" fill="${col('rl')}"/><rect x="100" y="152" width="12" height="36" rx="5" fill="${col('rr')}"/>
     ${line(20, 100, -2, 118, 'izq')}${line(100, 100, 122, 118, 'der')}${line(40, 222, 80, 222, 'malet')}${line(40, 8, 80, 8, 'capó')}
   </svg>`;
 }
@@ -333,8 +334,8 @@ function viewEstado(c) {
   const running = c.ignition !== 'off';
   const t = c.tyres || {};
   const tyre = (k, label, right) => {
-    const v = t[k], low = v != null && v < 2.2;
-    return `<div class="col" style="gap:2px;${right ? 'align-items:flex-end;text-align:right' : ''}"><span class="k" style="${low ? 'color:' + C.wa : ''}">${label}</span><span class="m" style="font-size:24px;font-weight:700;${low ? 'color:' + C.wa : ''}">${nf(v, 2)}</span><span style="font-size:11px;color:${low ? C.wa : C.mu}">${low ? 'baja' : 'bar'}</span></div>`;
+    const v = t[k], low = tyreLow(c, k), ref = c.tyre_ref && c.tyre_ref[k];
+    return `<div class="col" style="gap:2px;${right ? 'align-items:flex-end;text-align:right' : ''}"><span class="k" style="${low ? 'color:' + C.wa : ''}">${label}</span><span class="m" style="font-size:24px;font-weight:700;${low ? 'color:' + C.wa : ''}">${nf(v, 2)}</span><span style="font-size:11px;color:${low ? C.wa : C.mu}">${low ? 'baja' : 'bar'}${ref ? ' · rec. ' + nf(ref, 2) : ''}</span></div>`;
   };
   const open = [...(c.doors_open || []), ...(c.windows_open || [])];
   const due = maint ? maint.items.filter(i => i.status === 'vencido' || i.status === 'pronto') : [];
@@ -358,7 +359,7 @@ function viewEstado(c) {
   </div>
   <div class="g3">
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Odómetro</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.odometer_km)}</span></div>
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.battery_v, 1)} V</span><span style="font-size:11px;color:${bCol}">${bTxt}${battery && battery.status === 'bajando' ? ' · bajando' : ''}</span></div>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.battery_v, 1)} V</span><span style="font-size:11px;color:${bCol}">${bTxt}${c.battery_soc != null ? ' · ' + nf(c.battery_soc) + ' %' : ''}${battery && battery.status === 'bajando' ? ' · bajando' : ''}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Puertas</span><span class="m" style="font-size:20px;font-weight:700;color:${open.length ? C.bad : C.ok}">${open.length ? 'ABIERTO' : 'OK'}</span>${open.length ? `<span style="font-size:11px;color:${C.bad}">${esc(open.join(', '))}</span>` : ''}</div>
   </div>
   ${loc ? `<div class="pn" style="padding:10px;display:flex;align-items:center;gap:12px">
@@ -383,10 +384,11 @@ function viewEstado(c) {
 
 function viewMotor(c) {
   const running = c.ignition !== 'off';
-  const oil = c.oil_c ?? 0;
+  const useOil = c.oil_c != null;
+  const oil = (useOil ? c.oil_c : c.coolant_c) ?? 0, hot = useOil ? 80 : 85;
   const warm = !running ? ['Motor apagado: temperaturas de la última lectura.', C.mu]
     : oil < 60 ? ['Frío: conduce suave, sin pasar de 3.000 rpm.', C.blue]
-    : oil < 80 ? ['Casi listo. Aún sin apretar a fondo.', C.wa]
+    : oil < hot ? ['Casi listo. Aún sin apretar a fondo.', C.wa]
     : ['A temperatura. Ya puedes apretar.', C.ok];
   const z = (from, to) => Math.max(0, Math.min(1, (oil - from) / (to - from))) * 100;
   return `
@@ -400,18 +402,19 @@ function viewMotor(c) {
     </div>
   </div>
   <div class="pn pad col" style="gap:10px">
-    <div class="row" style="align-items:baseline"><span class="k">Aceite</span><span class="m" style="font-size:30px;font-weight:700">${nf(c.oil_c)} <span style="font-size:14px;color:#7d858f">°C</span></span></div>
-    <div style="display:grid;grid-template-columns:6fr 2fr 4fr;gap:4px;height:12px">
+    <div class="row" style="align-items:baseline"><span class="k">${useOil ? 'Aceite' : 'Temperatura motor'}</span><span class="m" style="font-size:30px;font-weight:700">${nf(oil)} <span style="font-size:14px;color:#7d858f">°C</span></span></div>
+    <div style="display:grid;grid-template-columns:6fr ${hot - 60}fr ${120 - hot}fr;gap:4px;height:12px">
       <div style="background:#173049;border-radius:3px;overflow:hidden"><div style="height:100%;width:${z(0, 60)}%;background:${C.blue}"></div></div>
-      <div style="background:#3a3110;border-radius:3px;overflow:hidden"><div style="height:100%;width:${z(60, 80)}%;background:${C.wa}"></div></div>
-      <div style="background:#123526;border-radius:3px;overflow:hidden"><div style="height:100%;width:${z(80, 120)}%;background:${C.ok}"></div></div>
+      <div style="background:#3a3110;border-radius:3px;overflow:hidden"><div style="height:100%;width:${z(60, hot)}%;background:${C.wa}"></div></div>
+      <div style="background:#123526;border-radius:3px;overflow:hidden"><div style="height:100%;width:${z(hot, 120)}%;background:${C.ok}"></div></div>
     </div>
-    <div class="row m" style="font-size:10px;color:#7d858f"><span>FRÍO</span><span>CALENTANDO · 60°</span><span>LISTO · 80°</span></div>
+    <div class="row m" style="font-size:10px;color:#7d858f"><span>FRÍO</span><span>CALENTANDO · 60°</span><span>LISTO · ${hot}°</span></div>
     <span style="font-size:13px;color:${warm[1]}">${warm[0]}</span>
+    ${useOil ? '' : '<span style="font-size:12px;color:#7d858f">Tu coche no envía la temperatura del aceite; uso la del refrigerante, que se calienta antes que el aceite.</span>'}
   </div>
   <div class="g3">
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Refrig.</span><span class="m" style="font-size:22px;font-weight:700;${c.coolant_c > 105 ? 'color:' + C.bad : ''}">${nf(c.coolant_c)}°</span></div>
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Exterior</span><span class="m" style="font-size:22px;font-weight:700">${nf(c.outside_c)}°</span></div>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${useOil ? 'Refrig.' : 'Vida aceite'}</span><span class="m" style="font-size:22px;font-weight:700;${useOil && c.coolant_c > 105 ? 'color:' + C.bad : ''}">${useOil ? nf(c.coolant_c) + '°' : nf(c.oil_life_pct) + '%'}</span></div>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${c.outside_c != null ? 'Exterior' : 'Freno mano'}</span><span class="m" style="font-size:22px;font-weight:700">${c.outside_c != null ? nf(c.outside_c) + '°' : c.parking_brake == null ? '—' : c.parking_brake ? 'ON' : 'OFF'}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${nf(c.battery_v, 1)}</span></div>
   </div>
   <div class="pn pad" style="display:grid;grid-template-columns:auto 1fr auto;gap:10px 12px;align-items:center">
@@ -549,6 +552,9 @@ function viewTaller() {
     </div>`;
   }).join('');
   return `
+  ${live && live.oil_life_pct != null ? `<div class="pn pad col" style="gap:8px"><div class="row"><span class="k">Vida del aceite · según Ford</span><span class="m" style="font-size:26px;font-weight:700;color:${live.oil_life_pct < 15 ? C.bad : live.oil_life_pct < 30 ? C.wa : C.ok}">${nf(live.oil_life_pct)} %</span></div>
+    <div style="display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:3px">${Array.from({ length: 12 }, (_, k) => `<div style="height:10px;border-radius:2px;background:${(k + 1) / 12 <= live.oil_life_pct / 100 + 1e-9 ? (live.oil_life_pct < 15 ? C.bad : live.oil_life_pct < 30 ? C.wa : C.ok) : '#1d2126'}"></div>`).join('')}</div>
+    <span style="font-size:12px;color:#7d858f">El coche lo calcula según tu forma de conducir. Cuando llegue a 0 % toca cambiarlo.</span></div>` : ''}
   <div class="pn pad row"><div class="col" style="gap:4px"><span class="k">Odómetro</span><span class="m" style="font-size:26px;font-weight:700">${nf(maint.odometer)} km</span></div>
     <span style="font-size:12px;color:#7d858f;max-width:170px;text-align:right">Intervalos de ejemplo: ajústalos. Aviso a las 9:00 si faltan 1.000 km o 30 días.</span></div>
   ${items}
@@ -645,15 +651,16 @@ function renderDrive() {
   const show = c && (driveForced || (running && !driveDismissed));
   if (!show) { host.innerHTML = ''; return; }
   const night = c.location ? !sunUp(c.location.lat, c.location.lon) : (new Date().getHours() >= 19 || new Date().getHours() < 8);
-  const oilCol = c.oil_c >= 80 ? 'var(--ok)' : c.oil_c >= 60 ? 'var(--wa)' : 'var(--blue)';
+  const wt = c.oil_c ?? c.coolant_c, hot = c.oil_c != null ? 80 : 85;
+  const oilCol = wt >= hot ? 'var(--ok)' : wt >= 60 ? 'var(--wa)' : 'var(--blue)';
   host.innerHTML = `<button id="drive" class="${night ? 'night' : ''}" aria-label="Salir del modo conducción">
     <span class="row" style="width:100%"><span class="k" style="color:var(--ac);display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--ac)"></span>Modo conducción${night ? ' · noche' : ''}</span>
-      <span class="m" style="font-size:13px;color:#7d858f">${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })} · ${nf(c.outside_c)} °C</span></span>
+      <span class="m" style="font-size:13px;color:#7d858f">${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}${c.outside_c != null ? ' · ' + nf(c.outside_c) + ' °C' : ''}</span></span>
     <span style="width:100%;display:block;${night ? 'filter:saturate(.7) brightness(.8)' : ''}">${revBar(running ? c.rpm : 0, 32, 7000, 30)}</span>
     <span class="col" style="flex:1;align-items:center;justify-content:center;width:100%">
       <span class="big-speed">${running ? nf(c.speed_kmh) : '0'}</span><span class="k" style="font-size:14px">km/h</span></span>
     <span style="display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:12px;width:100%">
-      <span class="col" style="gap:4px"><span class="k">Aceite</span><span class="m" style="font-size:40px;font-weight:700;color:${oilCol};line-height:1">${nf(c.oil_c)}°</span></span>
+      <span class="col" style="gap:4px"><span class="k">${c.oil_c != null ? 'Aceite' : 'Motor'}</span><span class="m" style="font-size:40px;font-weight:700;color:${oilCol};line-height:1">${nf(wt)}°</span></span>
       <span class="gear-box"><span class="m" style="font-size:92px;font-weight:700;line-height:.85">${running && c.gear ? c.gear : 'N'}</span><span class="m" style="font-size:11px;font-weight:700;letter-spacing:.14em">MARCHA</span></span>
       <span class="col" style="gap:4px;align-items:flex-end"><span class="k">Régimen</span><span class="m" style="font-size:40px;font-weight:700;line-height:1">${running ? nf(c.rpm) : '—'}</span></span>
     </span>
