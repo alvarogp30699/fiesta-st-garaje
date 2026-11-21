@@ -38,6 +38,8 @@ export default {
       if (m === 'GET' && p === '/api/battery') return json(await getBattery(env, clampInt(url.searchParams.get('days'), 3, 90, 14)));
       if (m === 'GET' && p === '/api/refuels') return json(await getRefuels(env));
       if (m === 'POST' && (mt = p.match(/^\/api\/refuels\/(\d+)$/))) return json(await updateRefuel(env, +mt[1], await req.json()));
+      if (m === 'POST' && p === '/api/ford/connect') return json(await fordConnect(env, await req.json()));
+      if (m === 'GET' && p === '/api/ford/status') return json(await fordStatus(env));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
       if (m === 'POST' && p === '/api/guard') return json(await setGuard(env, await req.json()));
       if (m === 'GET' && p === '/api/parking') return json(await getParking(env));
@@ -67,7 +69,7 @@ export default {
     const st = await loadState(env);
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     // Con Ford real: aparcado, una consulta cada 5 min; en marcha, cada minuto.
-    const poll = env.SOURCE !== 'ford' || st.trip || minute % 5 === 0;
+    const poll = src(env) !== 'ford' || st.trip || minute % 5 === 0;
     if (poll) {
       try { await ingest(env, await readCar(env), st); } catch (e) { console.error('ingest', e); }
     }
@@ -79,14 +81,189 @@ export default {
 // ---------- Fuente de datos ----------
 
 async function readCar(env) {
-  const car = env.SOURCE === 'ford' ? await fordCar(env) : mockCar(Date.now());
+  const car = src(env) === 'ford' ? await fordCar(env) : mockCar(Date.now());
   car.alerts = Object.values(carAlerts(car));
   return car;
 }
 
+// ---------- Ford real (mismas llamadas que la app oficial; ver pyfordpass) ----------
+
+const FORD = {
+  UA: 'okhttp/4.12.0', APP_ID: '667D773E-1BDC-4139-8AD0-2B16474E8DC7', COUNTRY: 'ESP', LOCALE: 'es-ES',
+  FOUND: 'https://api.foundational.ford.com', TMC_ACC: 'https://accounts.autonomic.ai', TMC: 'https://api.autonomic.ai'
+};
+
+function jwtExp(t) {
+  try {
+    let p = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (p.length % 4) p += '=';
+    return (JSON.parse(atob(p)).exp || 0) * 1000;
+  } catch (e) { return 0; }
+}
+
+async function fordLoad(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford'").first();
+  return row ? JSON.parse(row.v) : null;
+}
+async function fordSave(env, f) {
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford', ?)").bind(JSON.stringify(f)).run();
+}
+
+async function fordTokens(env) {
+  const f = await fordLoad(env);
+  if (!f || !f.cat_refresh) throw httpError('El coche no está conectado con Ford.', 409);
+  const now = Date.now();
+  let changed = false;
+  if (!f.cat || !f.cat_exp || f.cat_exp - now < 120e3) {
+    const r = await fetch(FORD.FOUND + '/api/token/v2/cat-with-refresh-token', {
+      method: 'POST',
+      headers: { 'application-id': FORD.APP_ID, 'content-type': 'application/json', 'user-agent': FORD.UA },
+      body: JSON.stringify({ refresh_token: f.cat_refresh })
+    });
+    if (!r.ok) {
+      f.error = `Renovar acceso: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`;
+      await fordSave(env, f);
+      throw httpError('Ford ha rechazado el acceso guardado. Hay que volver a conectar la cuenta.', 502);
+    }
+    const j = await r.json();
+    f.cat = j.access_token;
+    if (j.refresh_token) f.cat_refresh = j.refresh_token;
+    f.cat_exp = jwtExp(f.cat) || now + (j.expires_in || 1800) * 1000;
+    f.tmc = null;
+    changed = true;
+  }
+  if (!f.tmc || !f.tmc_exp || f.tmc_exp - now < 120e3) {
+    const r = await fetch(FORD.TMC_ACC + '/v1/auth/oidc/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': FORD.UA },
+      body: new URLSearchParams({
+        client_id: 'fordpass-prod', grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        subject_issuer: 'fordpass', subject_token: f.cat_refresh, subject_token_type: 'urn:ietf:params:oauth:token-type:jwt'
+      })
+    });
+    if (!r.ok) {
+      f.error = `Token de telemetría: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`;
+      await fordSave(env, f);
+      throw httpError('Ford no ha dado acceso a la telemetría del coche.', 502);
+    }
+    const j = await r.json();
+    f.tmc = j.access_token;
+    f.tmc_exp = jwtExp(f.tmc) || now + (j.expires_in || 1800) * 1000;
+    changed = true;
+  }
+  if (changed) { f.error = null; await fordSave(env, f); }
+  return f;
+}
+
 async function fordCar(env) {
-  // Se completa cuando tengamos tu acceso de Ford y una respuesta real del coche.
-  throw new Error('Conexión con Ford pendiente. Deja SOURCE = mock hasta configurarla.');
+  const f = await fordTokens(env);
+  const r = await fetch(`${FORD.TMC}/v1beta/telemetry/sources/fordpass/vehicles/${f.vin}:query`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + f.tmc, 'content-type': 'application/json', 'user-agent': FORD.UA },
+    body: '{}'
+  });
+  if (!r.ok) {
+    const t = (await r.text()).slice(0, 200);
+    f.error = `Telemetría: HTTP ${r.status} ${t}`;
+    if (r.status === 401) f.tmc = null;
+    await fordSave(env, f);
+    throw httpError(`Ford no ha devuelto datos del coche (HTTP ${r.status}).`, 502);
+  }
+  const data = await r.json();
+  // Guardamos la última respuesta en bruto (como mucho una vez por hora) para ajustar la traducción.
+  const raw = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_raw_at'").first();
+  if (!raw || Date.now() - Number(raw.v) > 3600e3) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford_raw', ?)").bind(JSON.stringify(data).slice(0, 900000)),
+      env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford_raw_at', ?)").bind(String(Date.now()))
+    ]);
+  }
+  return mapTelemetry(data);
+}
+
+const DOORS_ES = {
+  DRIVER: 'puerta conductor', PASSENGER: 'puerta acompañante', UNSPECIFIED_FRONT: 'puerta delantera',
+  REAR_LEFT: 'puerta trasera izq.', REAR_RIGHT: 'puerta trasera der.', TAILGATE: 'maletero', INNER_TAILGATE: 'maletero',
+  HOOD: 'capó', HOOD_DOOR: 'capó', ROOF: 'techo'
+};
+const GEARS = { PARK: 'P', REVERSE: 'R', NEUTRAL: 'N', DRIVE: 'D', FIRST: 1, SECOND: 2, THIRD: 3, FOURTH: 4, FIFTH: 5, SIXTH: 6, SEVENTH: 7 };
+
+function mapTelemetry(data) {
+  const m = data.metrics || {};
+  const val = k => { const e = m[k]; return e && !Array.isArray(e) && typeof e === 'object' ? e.value : undefined; };
+  const num = x => (typeof x === 'number' ? x : x != null && x !== '' && !isNaN(+x) ? +x : null);
+  const r1 = x => (x == null ? null : Math.round(x * 10) / 10);
+  const ign = String(val('ignitionStatus') ?? 'OFF').toUpperCase();
+  const running = !/OFF|LOCK/.test(ign) && /RUN|ON|START/.test(ign);
+  const tyres = {};
+  for (const t of Array.isArray(m.tirePressure) ? m.tirePressure : []) {
+    const k = { FRONT_LEFT: 'fl', FRONT_RIGHT: 'fr', REAR_LEFT: 'rl', REAR_RIGHT: 'rr' }[t.vehicleWheel];
+    if (k && t.value != null) tyres[k] = Math.round(num(t.value) / 100 * 100) / 100; // kPa → bar
+  }
+  const doors = Array.isArray(m.doorStatus) ? m.doorStatus : [];
+  const doors_open = doors.filter(d => d.value && !/CLOSED|UNKNOWN/i.test(String(d.value)))
+    .map(d => DOORS_ES[d.vehiclePart || d.vehicleDoor] || String(d.vehiclePart || d.vehicleDoor || 'puerta').toLowerCase());
+  let locked = null;
+  const lk = m.doorLockStatus;
+  if (Array.isArray(lk)) {
+    const all = lk.find(d => /ALL/.test(String(d.vehicleDoor || ''))) || lk[0];
+    if (all && all.value != null) locked = /LOCK/i.test(all.value) && !/UNLOCK/i.test(all.value);
+  } else if (lk && lk.value != null) locked = /LOCK/i.test(lk.value) && !/UNLOCK/i.test(lk.value);
+  const pos = val('position');
+  const loc = pos && pos.location && pos.location.lat != null ? { lat: +pos.location.lat, lon: +pos.location.lon } : null;
+  const gearRaw = val('gearLeverPosition');
+  const brake = val('brakePedalStatus');
+  return {
+    ts: Date.now(),
+    source: 'ford',
+    odometer_km: r1(num(val('odometer'))),
+    fuel_pct: r1(num(val('fuelLevel'))),
+    range_km: num(val('fuelRange')) != null ? Math.round(num(val('fuelRange'))) : null,
+    battery_v: num(val('batteryVoltage')) != null ? Math.round(num(val('batteryVoltage')) * 100) / 100 : null,
+    tyres,
+    locked,
+    doors_open,
+    windows_open: [],
+    ignition: running ? 'run' : 'off',
+    ignition_raw: ign,
+    speed_kmh: running ? Math.round(num(val('speed')) || 0) : 0,
+    gear: running ? (GEARS[String(gearRaw).toUpperCase()] ?? gearRaw ?? null) : null,
+    rpm: running ? Math.round(num(val('engineSpeed')) || 0) : 0,
+    throttle_pct: running ? Math.round(num(val('acceleratorPedalPosition')) || 0) : 0,
+    brake_pct: running && (brake === true || /ON|APPLIED|PRESS/i.test(String(brake))) ? 100 : 0,
+    oil_c: num(val('engineOilTemp')),
+    coolant_c: num(val('engineCoolantTemp')),
+    outside_c: num(val('outsideTemperature') ?? val('ambientTemp')),
+    oil_life_pct: num(val('oilLifeRemaining')),
+    location: loc,
+    metrics_count: Object.keys(m).length
+  };
+}
+
+async function fordConnect(env, b) {
+  if (!b || typeof b.cat_refresh !== 'string' || typeof b.vin !== 'string' || b.vin.length !== 17) throw httpError('Faltan los datos de Ford', 400);
+  const f = { cat: typeof b.cat === 'string' ? b.cat : null, cat_refresh: b.cat_refresh, vin: b.vin.toUpperCase(), connected_at: Date.now() };
+  f.cat_exp = f.cat ? jwtExp(f.cat) : 0;
+  await fordSave(env, f);
+  let car;
+  try { car = await fordCar(env); }
+  catch (e) { return { ok: false, error: e.message + ((await fordLoad(env)).error ? ' · ' + (await fordLoad(env)).error : '') }; }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('source', 'ford')").run();
+  ready = false;
+  return {
+    ok: true,
+    summary: { fuel_pct: car.fuel_pct, range_km: car.range_km, odometer_km: car.odometer_km, battery_v: car.battery_v, ignition: car.ignition_raw, fields: car.metrics_count }
+  };
+}
+
+async function fordStatus(env) {
+  const f = await fordLoad(env);
+  const raw = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_raw'").first();
+  return {
+    source: src(env), connected: !!(f && f.cat_refresh), vin_end: f && f.vin ? f.vin.slice(-6) : null,
+    connected_at: f && f.connected_at, error: f && f.error,
+    metrics: raw ? Object.keys(JSON.parse(raw.v).metrics || {}) : []
+  };
 }
 
 // Coche simulado: función pura del tiempo, así el histórico es coherente.
@@ -160,7 +337,7 @@ function carAlerts(c) {
   const out = {};
   for (const k in c.tyres || {}) {
     const v = c.tyres[k];
-    if (v != null && v < TYRE_MIN) out['tyre_' + k] = `Presión baja en la rueda ${TYRE_NAMES[k] || k} (${fmt(v, 1)} bar)`;
+    if (v != null && v < TYRE_MIN) out['tyre_' + k] = `Presión baja en la rueda ${TYRE_NAMES[k] || k} (${fmt(v, 2)} bar)`;
   }
   if (!running && c.battery_v != null && c.battery_v < BATT_MIN) out.batt = `Batería de 12 V baja (${fmt(c.battery_v, 1)} V)`;
   if (!running && c.locked === false) out.unlocked = 'El coche está aparcado sin cerrar';
@@ -330,11 +507,17 @@ async function daily(env, when) {
 
 // ---------- Base de datos ----------
 
-let ready = false;
+let ready = false, SRC = null;
+function src(env) { return SRC || env.SOURCE || 'mock'; }
 async function prepare(env) {
-  if (ready) return;
   const db = env.DB;
-  await db.prepare('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)').run();
+  const [, srcRow] = await db.batch([
+    db.prepare('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)'),
+    db.prepare("SELECT v FROM kv WHERE k = 'source'")
+  ]);
+  const s = (srcRow.results && srcRow.results[0] && srcRow.results[0].v) || env.SOURCE || 'mock';
+  if (ready && s === SRC) return;
+  SRC = s;
   const ver = await db.prepare("SELECT v FROM kv WHERE k = 'schema'").first();
   if (!ver || ver.v !== SCHEMA) {
     // Versión anterior solo con datos de prueba: se recrea.
@@ -364,15 +547,15 @@ async function prepare(env) {
       db.prepare('INSERT INTO maintenance (name, interval_km, interval_months) VALUES (?, ?, ?)').bind(n, km, mo)));
   }
   const demo = await db.prepare("SELECT v FROM kv WHERE k = 'demo'").first();
-  if (env.SOURCE === 'ford' && demo) {
+  if (src(env) === 'ford' && demo) {
     // Al pasar a datos reales se borran los de prueba (el mantenimiento se conserva).
     await db.batch([
       db.prepare('DELETE FROM snapshots'),
       db.prepare('DELETE FROM refuels'),
       db.prepare('DELETE FROM trips'),
-      db.prepare("DELETE FROM kv WHERE k IN ('demo', 'state', 'live_cache')")
+      db.prepare("DELETE FROM kv WHERE k IN ('demo', 'state', 'live_cache', 'parking')")
     ]);
-  } else if (env.SOURCE !== 'ford' && !demo) {
+  } else if (src(env) !== 'ford' && !demo) {
     await backfillMock(env);
   }
   ready = true;
@@ -400,7 +583,7 @@ async function backfillMock(env) {
 // ---------- Endpoints ----------
 
 async function getLive(env, ctx) {
-  if (env.SOURCE === 'ford') {
+  if (src(env) === 'ford') {
     const cached = await env.DB.prepare("SELECT v FROM kv WHERE k = 'live_cache'").first();
     if (cached) {
       const c = JSON.parse(cached.v);
@@ -408,7 +591,7 @@ async function getLive(env, ctx) {
     }
   }
   const car = await readCar(env);
-  if (env.SOURCE === 'ford') {
+  if (src(env) === 'ford') {
     await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('live_cache', ?)").bind(JSON.stringify(car)).run();
   }
   await ingest(env, car);
@@ -588,7 +771,7 @@ async function exportAll(env) {
     all('SELECT * FROM maintenance ORDER BY id'),
     all("SELECT k, v FROM kv WHERE k IN ('guard', 'parking')")
   ]);
-  return { app: 'fiesta-st-garaje', schema: SCHEMA, exported_at: new Date().toISOString(), source: env.SOURCE || 'mock', snapshots, refuels, trips, maintenance, settings: kv };
+  return { app: 'fiesta-st-garaje', schema: SCHEMA, exported_at: new Date().toISOString(), source: src(env) || 'mock', snapshots, refuels, trips, maintenance, settings: kv };
 }
 
 async function tripRecords(env) {
