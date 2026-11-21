@@ -14,6 +14,15 @@ const TYRE_MIN = 2.2, BATT_MIN = 12.2, FUEL_MIN = 12, OIL_WARM = 80;
 const FUEL_API = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/FiltroProvincia/';
 const FUEL_FIELDS = { '95': 'Precio Gasolina 95 E5', '98': 'Precio Gasolina 98 E5' };
 const PUSH_SUBJECT = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
+// Circuitos conocidos: centro aproximado del recinto y radio en km.
+const CIRCUITS = [
+  { id: 'albacete', name: 'Circuito de Albacete', lat: 39.00782, lon: -1.79590, r: 1.0 },
+  { id: 'motorland', name: 'MotorLand Aragón', lat: 41.0755, lon: -0.1980, r: 1.9 }
+];
+function circuitAt(loc) {
+  if (!loc || loc.lat == null) return null;
+  return CIRCUITS.find(c => distKm(loc.lat, loc.lon, c.lat, c.lon) <= c.r) || null;
+}
 const TYRE_NAMES = { fl: 'delantera izquierda', fr: 'delantera derecha', rl: 'trasera izquierda', rr: 'trasera derecha' };
 const DEFAULT_MAINT = [
   ['Aceite y filtro', 15000, 12],
@@ -41,6 +50,7 @@ export default {
       if (m === 'POST' && p === '/api/ford/connect') return json(await fordConnect(env, await req.json()));
       if (m === 'POST' && p === '/api/ford/refresh') return json(await fordRefresh(env));
       if (m === 'GET' && p === '/api/ford/status') return json(await fordStatus(env));
+      if (m === 'GET' && p === '/api/circuits') return json(await circuitStats(env));
       if (m === 'GET' && p === '/api/track') return json(await getTrack(env));
       if (m === 'POST' && p === '/api/track') return json(await setTrack(env, await req.json()));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
@@ -86,6 +96,9 @@ export default {
 async function readCar(env) {
   const car = src(env) === 'ford' ? await fordCar(env) : mockCar(Date.now());
   const track = await getTrack(env);
+  const here = circuitAt(car.location);
+  car.circuit = here ? here.name : null;
+  if (here) { track.active = true; track.auto = true; track.circuit = here.name; }
   car.track = track.active ? track : null;
   car.alerts = Object.entries(carAlerts(car)).filter(([k]) => !(track.active && k.startsWith('tyre_'))).map(([, v]) => v);
   return car;
@@ -480,11 +493,11 @@ function processCar(db, st, c, opts = {}) {
       if (c.location) pts.push([c.location.lat, c.location.lon, 0, c.ts]);
       const end = c.location ? [c.location.lat, c.location.lon] : t.end;
       stmts.push(db.prepare(`INSERT INTO trips (start_ts, end_ts, start_odo, end_odo, km, duration_s, avg_speed, max_speed,
-          max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l, start_lat, start_lon, end_lat, end_lon, points, track)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l, start_lat, start_lon, end_lat, end_lon, points, track, circuit)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(t.start_ts, t.end_ts, t.start_odo, endOdo, km, dur, Math.round(km / (dur / 3600)), t.max_speed,
           t.max_rpm, t.max_oil, Math.round(t.thr / t.n), Math.round((t.hi / t.n) * 100), round(usedL, 2),
-          t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts), t.track || c.track ? 1 : 0));
+          t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts), t.track || c.track ? 1 : 0, t.circuit || (pts.map(p => circuitAt({ lat: p[0], lon: p[1] })).find(Boolean) || {}).name || null));
     }
     st.trip = null;
     if (c.location) st.parked = { ts: c.ts, lat: c.location.lat, lon: c.location.lon };
@@ -493,6 +506,14 @@ function processCar(db, st, c, opts = {}) {
     notes.push({ title: '⚠️ El coche se ha movido', body: 'Se ha desplazado más de 300 m con el motor apagado (¿grúa?). Revisa la ubicación.', url: '#estado', tag: 'moved', urgent: true });
   }
   if (running) st.movedAlerted = false;
+
+  // Llegada / salida de un circuito
+  const circ = circuitAt(c.location);
+  if (circ && st.circuit !== circ.id && !opts.silent) {
+    notes.push({ title: '🏁 ' + circ.name, body: 'Modo circuito activado: sin avisos de presión y trayectos guardados como circuito.', url: '#viajes', tag: 'circuit' });
+  }
+  st.circuit = circ ? circ.id : null;
+  if (circ && st.trip) { st.trip.track = true; st.trip.circuit = circ.name; }
 
   // Avisos (solo cuando aparecen)
   const cur = carAlerts(c);
@@ -604,6 +625,7 @@ async function prepare(env) {
     db.prepare("INSERT OR REPLACE INTO kv VALUES ('schema', ?)").bind(SCHEMA)
   ]);
   try { await db.prepare('ALTER TABLE trips ADD COLUMN track INTEGER DEFAULT 0').run(); } catch (e) { /* ya existe */ }
+  try { await db.prepare('ALTER TABLE trips ADD COLUMN circuit TEXT').run(); } catch (e) { /* ya existe */ }
   const mc = await db.prepare('SELECT COUNT(*) AS n FROM maintenance').first();
   if (!mc.n) {
     await db.batch(DEFAULT_MAINT.map(([n, km, mo]) =>
@@ -719,7 +741,7 @@ async function updateRefuel(env, ts, body) {
 async function listTrips(env, limit) {
   const { results } = await env.DB.prepare(
     `SELECT id, start_ts, end_ts, km, duration_s, avg_speed, max_speed, max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l,
-     track, points FROM trips ORDER BY start_ts DESC LIMIT ?`
+     track, circuit, points FROM trips ORDER BY start_ts DESC LIMIT ?`
   ).bind(limit).all();
   const price = await priceFinder(env);
   return {
@@ -772,6 +794,16 @@ async function priceFinder(env) {
 }
 
 // ---------- Vigilancia y aparcamiento ----------
+
+async function circuitStats(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT circuit, COUNT(*) AS sessions, COUNT(DISTINCT date((start_ts + 3600000) / 1000, 'unixepoch')) AS days,
+      MAX(max_speed) AS top_speed, MAX(max_rpm) AS top_rpm, MAX(max_oil) AS top_temp, SUM(km) AS km,
+      SUM(duration_s) AS secs, MAX(start_ts) AS last_ts
+     FROM trips WHERE circuit IS NOT NULL GROUP BY circuit ORDER BY last_ts DESC`
+  ).all();
+  return { circuits: results, known: CIRCUITS.map(c => c.name) };
+}
 
 async function getTrack(env) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'track'").first();
