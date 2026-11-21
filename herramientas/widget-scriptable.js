@@ -54,9 +54,16 @@ if (!d) {
   if (d.doors_open && d.doors_open.length) { const t = w.addText('Puerta abierta'); t.font = Font.mediumSystemFont(12); t.textColor = WA; }
 
   const t = d.tyres || {}, f = v => v == null ? '—' : v.toFixed(2).replace('.', ',');
-  const tyres = w.addText(`${f(t.fl)}  ${f(t.fr)}\n${f(t.rl)}  ${f(t.rr)}`);
-  tyres.font = Font.mediumMonospacedSystemFont(12);
-  tyres.textColor = d.tyres_low && d.tyres_low.length ? WA : TX;
+  const low = d.tyres_low || [];
+  for (const [a, b] of [['fl', 'fr'], ['rl', 'rr']]) {
+    const row = w.addStack();
+    for (const k of [a, b]) {
+      const x = row.addText(f(t[k]));
+      x.font = Font.mediumMonospacedSystemFont(12);
+      x.textColor = low.includes(k) ? WA : TX;
+      if (k === a) row.addSpacer(10);
+    }
+  }
   if (d.circuit) { const c = w.addText('🏁 ' + d.circuit); c.font = Font.boldSystemFont(11); c.textColor = AC; }
 
   w.addSpacer();
