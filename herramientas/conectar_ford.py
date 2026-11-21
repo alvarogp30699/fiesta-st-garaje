@@ -137,7 +137,14 @@ async def capture_code(auth_url: str) -> str:
         context.on('page', lambda pg: asyncio.ensure_future(watch(pg)))
 
         page = context.pages[0] if context.pages else await context.new_page()
-        await page.goto(auth_url)
+        try:
+            await page.goto(auth_url)
+        except Exception:
+            # Si Ford ya recuerda la sesión, redirige al instante a fordapp:// y la carga "se aborta":
+            # es lo esperado, el código ya se ha capturado.
+            pass
+        if captured.done():
+            print('🔓 Ford ha recordado tu sesión: no hace falta volver a hacer login.')
 
         print('\n🖥️  Abre el escritorio en otra pestaña de Safari:')
         print('    Pestaña PORTS (abajo) → puerto 6080 → icono del globo.')
