@@ -230,9 +230,15 @@ function mapTelemetry(data) {
   const pos = val('position');
   const loc = pos && pos.location && pos.location.lat != null ? { lat: +pos.location.lat, lon: +pos.location.lon } : null;
   const gearRaw = val('gearLeverPosition');
+  let dataTs = 0;
+  for (const k of ['ignitionStatus', 'position', 'odometer', 'fuelLevel', 'batteryVoltage']) {
+    const t = m[k] && m[k].updateTime ? Date.parse(m[k].updateTime) : 0;
+    if (t > dataTs) dataTs = t;
+  }
   const brake = val('brakePedalStatus');
   return {
     ts: Date.now(),
+    data_ts: dataTs || null,
     source: 'ford',
     odometer_km: r1(num(val('odometer'))),
     fuel_pct: num(val('fuelLevel')) != null ? r1(Math.min(100, num(val('fuelLevel')))) : null,
@@ -481,6 +487,11 @@ async function ingest(env, car, st) {
   st = st || await loadState(env);
   const guard = await getGuard(env);
   const { stmts, notes } = processCar(env.DB, st, car, { guard });
+  if (car.ignition === 'off' && car.location && !st.parked) {
+    st.parked = { ts: car.data_ts || car.ts, lat: car.location.lat, lon: car.location.lon };
+    const has = await env.DB.prepare("SELECT 1 AS x FROM kv WHERE k = 'parking'").first();
+    if (!has) stmts.push(env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('parking', ?)").bind(JSON.stringify({ ...st.parked, note: null, timer_at: null })));
+  }
   if (st.trip == null && st.parked && st.parked.ts === car.ts) {
     stmts.push(env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('parking', ?)").bind(JSON.stringify({ ...st.parked, note: null, timer_at: null })));
   }

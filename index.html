@@ -349,7 +349,7 @@ function viewEstado(c) {
     <div class="col" style="gap:6px">
       <span class="k">Autonomía</span>
       <span class="m" style="font-size:52px;font-weight:700;line-height:.9"><span data-count="${c.range_km}">${nf(c.range_km)}</span><span style="font-size:18px;color:#7d858f;margin-left:4px">km</span></span>
-      <span style="font-size:13px;color:#7d858f">${refuels && refuels.avg_l100 ? nf(refuels.avg_l100, 1) + ' l/100 km · ' : ''}${ago(c.ts)}</span>
+      <span style="font-size:13px;color:#7d858f">${refuels && refuels.avg_l100 ? nf(refuels.avg_l100, 1) + ' l/100 km · ' : ''}dato del coche ${ago(c.data_ts || c.ts)}</span>
     </div>
   </div>
   <div class="pn" style="padding:14px 16px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px">
