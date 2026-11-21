@@ -38,6 +38,8 @@ UA = 'okhttp/4.12.0'
 LOGIN = 'https://login.ford.com'
 FOUNDATIONAL = 'https://api.foundational.ford.com'
 VEHICLE = 'https://api.vehicle.ford.com'
+BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+TOKENS_FILE = os.path.expanduser('~/.ford_tokens.json')
 
 
 def b64url(data: bytes) -> str:
@@ -173,6 +175,17 @@ def main() -> None:
     }
     auth_url = f'{LOGIN}/{TENANT}/{POLICY}/oauth2/v2.0/authorize?' + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
 
+    saved = None
+    if os.path.exists(TOKENS_FILE) and '--nuevo' not in sys.argv:
+        try:
+            saved = json.load(open(TOKENS_FILE))
+            print(f'♻️  Uso el acceso de Ford que ya conseguiste (coche …{saved["vin"][-6:]}). No hace falta volver a hacer login.')
+        except Exception:
+            saved = None
+    if saved:
+        send(worker, key, saved)
+        return
+
     if '--manual' in sys.argv:
         print('\nAbre esta dirección, haz login y pega aquí la dirección fordapp://… final:\n')
         print(auth_url, '\n')
@@ -212,9 +225,17 @@ def main() -> None:
             print(f'  {i}. …{v[-6:]}')
         vin = vins[int(input('Número del Fiesta ST: ') or 1) - 1]
     print(f'✅ Coche encontrado (VIN …{vin[-6:]}). Enviando a tu servidor…')
+    tokens = {'cat': cat['access_token'], 'cat_refresh': cat['refresh_token'], 'vin': vin}
+    with open(TOKENS_FILE, 'w') as fh:
+        json.dump(tokens, fh)
+    os.chmod(TOKENS_FILE, 0o600)
+    send(worker, key, tokens)
 
-    res = http('POST', f'{worker}/api/ford/connect', headers={'x-app-key': key, 'content-type': 'application/json'},
-               body=json.dumps({'cat': cat['access_token'], 'cat_refresh': cat['refresh_token'], 'vin': vin}).encode())
+
+def send(worker: str, key: str, tokens: dict) -> None:
+    res = http('POST', f'{worker}/api/ford/connect',
+               headers={'x-app-key': key, 'content-type': 'application/json', 'user-agent': BROWSER_UA, 'accept': 'application/json'},
+               body=json.dumps(tokens).encode())
     if not res.get('ok'):
         raise SystemExit(f'⚠️  Tokens guardados, pero la primera lectura del coche ha fallado:\n{res.get("error")}\n\nCópiame este mensaje en el chat.')
     s = res.get('summary', {})
