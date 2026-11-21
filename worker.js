@@ -88,6 +88,14 @@ export default {
       if (m === 'DELETE' && p.startsWith('/api/circuits/custom/')) return json(await delCustomCircuit(env, decodeURIComponent(p.slice(21))));
       if (m === 'GET' && p === '/api/track') return json(await getTrack(env));
       if (m === 'POST' && p === '/api/track') return json(await setTrack(env, await req.json()));
+      if (m === 'GET' && p === '/api/tyreset') return json(await getTyreSet(env));
+      if (m === 'POST' && p === '/api/tyreset') return json(await setTyreSet(env, await req.json()));
+      if (m === 'GET' && p === '/api/trackdays') return json(await trackDays(env));
+      if (m === 'POST' && p === '/api/trackdays/note') return json(await setTrackNote(env, await req.json()));
+      if (m === 'GET' && p === '/api/deadlines') return json(await listDeadlines(env));
+      if (m === 'POST' && p === '/api/deadlines') return json(await saveDeadline(env, await req.json()));
+      if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
+      if (m === 'GET' && p === '/api/widget') return json(await widget(env));
       if (m === 'GET' && p === '/api/tyres') return json(await getTyrePrefs(env));
       if (m === 'POST' && p === '/api/tyres') return json(await setTyrePrefs(env, await req.json()));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
@@ -630,6 +638,17 @@ async function daily(env, when) {
   if (local.getUTCDay() === 1) {
     try { await sendPushAll(env, await weeklySummary(env)); } catch (e) { console.error('semanal', e); }
   }
+  // Fechas (ITV, seguro, impuesto): a 30, 7 y 1 días y el mismo día
+  const { items: dl } = await listDeadlines(env);
+  const hits = dl.filter(d => d.days != null && [30, 7, 1, 0].includes(d.days));
+  if (hits.length) await sendPushAll(env, { title: 'Fechas del coche', url: '#taller', tag: 'deadline',
+    body: hits.map(d => `${d.name}: ${d.days === 0 ? 'vence hoy' : d.days === 1 ? 'vence mañana' : 'vence en ' + d.days + ' días'}`).join(' · ') });
+  // Coche parado varios días con la batería baja
+  const st = await loadState(env);
+  const last = await env.DB.prepare('SELECT battery_v AS battery FROM snapshots ORDER BY ts DESC LIMIT 1').first();
+  if (st.parked && !st.trip && Date.now() - st.parked.ts > 3 * 86400e3 && last && last.battery != null && last.battery < 12.3) {
+    await sendPushAll(env, { title: 'Batería baja', body: `Lleva ${Math.floor((Date.now() - st.parked.ts) / 86400e3)} días parado y la batería está a ${fmt(last.battery, 2)} V. Arráncalo y da una vuelta de 20 min.`, url: '#estado', tag: 'batt_idle' });
+  }
   const b = await getBattery(env, 14);
   if (b.status === 'bajando') {
     await sendPushAll(env, { title: 'Batería de 12 V', body: `Va bajando unos ${fmt(Math.abs(b.slope), 2)} V al día. Conviene revisarla.`, url: '#datos', tag: 'batt_trend' });
@@ -878,6 +897,133 @@ async function addCustomCircuit(env, b) {
 async function delCustomCircuit(env, id) {
   CUSTOM_CIRCUITS = CUSTOM_CIRCUITS.filter(c => c.id !== id);
   return saveCustom(env);
+}
+
+// ---------- Frenos: el circuito desgasta más ----------
+const PAD_TRACK_FACTOR = 5;      // 1 km de circuito ≈ 5 km de carretera para las pastillas
+const FLUID_DAYS_PER_TRACKDAY = 60; // cada día de circuito adelanta 2 meses el cambio de líquido
+
+async function trackSince(env, dateStr) {
+  const since = dateStr ? Date.parse(dateStr + 'T00:00:00Z') : 0;
+  const r = await env.DB.prepare(`SELECT COALESCE(SUM(km), 0) AS km, COUNT(DISTINCT date((start_ts + 3600000) / 1000, 'unixepoch')) AS days
+    FROM trips WHERE track = 1 AND start_ts >= ?`).bind(since).first();
+  return { km: r ? r.km : 0, days: r ? r.days : 0 };
+}
+
+async function brakeWear(env, i, odo) {
+  if (!i.last_date && i.last_km == null) return i;
+  if (/pastilla|disco/i.test(i.name) && i.interval_km && i.last_km != null) {
+    const t = await trackSince(env, i.last_date);
+    if (t.km > 0) {
+      const extra = Math.round(t.km * (PAD_TRACK_FACTOR - 1));
+      return { ...i, last_km: i.last_km - extra, track_note: `${fmt(t.km, 0)} km en circuito cuentan como ${fmt(t.km * PAD_TRACK_FACTOR, 0)}` };
+    }
+  }
+  if (/l[ií]quido de frenos/i.test(i.name) && i.interval_months && i.last_date) {
+    const t = await trackSince(env, i.last_date);
+    if (t.days > 0) {
+      const d = new Date(i.last_date + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() - t.days * FLUID_DAYS_PER_TRACKDAY);
+      return { ...i, last_date: d.toISOString().slice(0, 10), real_last_date: i.last_date, track_note: `${t.days} día${t.days > 1 ? 's' : ''} de circuito: adelanta el cambio` };
+    }
+  }
+  return i;
+}
+
+// ---------- Neumáticos montados ----------
+async function getTyreSet(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'tyre_set'").first();
+  const t = row ? JSON.parse(row.v) : { model: null, size: null, mounted_date: null, mounted_km: null, rotated_km: null };
+  const odo = await currentOdo(env);
+  const out = { ...t, odometer: odo, km: null, track_km: 0, track_days: 0, rotate_in_km: null };
+  if (t.mounted_km != null && odo != null) out.km = Math.max(0, Math.round(odo - t.mounted_km));
+  if (t.mounted_date) Object.assign(out, (({ km, days }) => ({ track_km: round(km, 1), track_days: days }))(await trackSince(env, t.mounted_date)));
+  const base = t.rotated_km ?? t.mounted_km;
+  if (base != null && odo != null) out.rotate_in_km = Math.round(base + 10000 - odo);
+  return out;
+}
+
+async function setTyreSet(env, b) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'tyre_set'").first();
+  const t = row ? JSON.parse(row.v) : {};
+  const n = v => (v === '' || v == null || isNaN(Number(String(v).replace(/\./g, '').replace(',', '.'))) ? null : Math.round(Number(String(v).replace(/\./g, '').replace(',', '.'))));
+  if (b.rotated) t.rotated_km = await currentOdo(env);
+  else {
+    t.model = String(b.model || '').trim().slice(0, 60) || null;
+    t.size = String(b.size || '').trim().slice(0, 30) || null;
+    t.mounted_date = /^\d{4}-\d{2}-\d{2}$/.test(b.mounted_date || '') ? b.mounted_date : null;
+    t.mounted_km = n(b.mounted_km);
+  }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('tyre_set', ?)").bind(JSON.stringify(t)).run();
+  return getTyreSet(env);
+}
+
+// ---------- Días de circuito ----------
+async function trackDays(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT date((start_ts + 3600000) / 1000, 'unixepoch') AS day, COALESCE(circuit, 'Circuito') AS circuit,
+      COUNT(*) AS sessions, SUM(km) AS km, SUM(duration_s) AS secs, MAX(max_speed) AS top_speed, MAX(max_rpm) AS top_rpm,
+      MAX(max_oil) AS top_temp, SUM(fuel_used_l) AS fuel_l, MIN(start_ts) AS first_ts
+     FROM trips WHERE track = 1 GROUP BY day, COALESCE(circuit, 'Circuito') ORDER BY day DESC LIMIT 60`).all();
+  const price = await priceFinder(env);
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'track_notes'").first();
+  const notes = row ? JSON.parse(row.v) : {};
+  return { days: results.map(d => ({ ...d, km: round(d.km || 0, 1), fuel_l: d.fuel_l != null ? round(d.fuel_l, 1) : null,
+    cost_eur: d.fuel_l != null ? round(d.fuel_l * price(d.first_ts), 2) : null, note: notes[d.day + '|' + d.circuit] || '' })) };
+}
+
+async function setTrackNote(env, b) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'track_notes'").first();
+  const notes = row ? JSON.parse(row.v) : {};
+  const key = String(b.day || '') + '|' + String(b.circuit || '');
+  const note = String(b.note || '').trim().slice(0, 2000);
+  if (note) notes[key] = note; else delete notes[key];
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('track_notes', ?)").bind(JSON.stringify(notes)).run();
+  return { ok: true };
+}
+
+// ---------- Fechas: ITV, seguro, impuesto ----------
+async function rawDeadlines(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'deadlines'").first();
+  return row ? JSON.parse(row.v) : [
+    { id: 'itv', name: 'ITV', date: null }, { id: 'seguro', name: 'Seguro', date: null }, { id: 'ivtm', name: 'Impuesto de circulación', date: null }
+  ];
+}
+
+async function listDeadlines(env) {
+  const now = Date.now();
+  const items = (await rawDeadlines(env)).map(d => {
+    const days = d.date ? Math.ceil((Date.parse(d.date + 'T00:00:00Z') - now) / 86400e3) : null;
+    return { ...d, days, status: days == null ? 'sin datos' : days < 0 ? 'vencido' : days <= 30 ? 'pronto' : 'ok' };
+  }).sort((a, b) => (a.days ?? 1e9) - (b.days ?? 1e9));
+  return { items };
+}
+
+async function saveDeadline(env, b) {
+  const list = await rawDeadlines(env);
+  const name = String(b.name || '').trim().slice(0, 50);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(b.date || '') ? b.date : null;
+  const i = list.findIndex(d => d.id === b.id);
+  if (i >= 0) list[i] = { ...list[i], name: name || list[i].name, date };
+  else { if (!name) throw httpError('Ponle un nombre', 400); list.push({ id: 'd' + Date.now(), name, date }); }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('deadlines', ?)").bind(JSON.stringify(list)).run();
+  return listDeadlines(env);
+}
+
+async function deleteDeadline(env, id) {
+  const list = (await rawDeadlines(env)).filter(d => d.id !== id);
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('deadlines', ?)").bind(JSON.stringify(list)).run();
+  return listDeadlines(env);
+}
+
+// ---------- Widget (Scriptable / Atajos) ----------
+async function widget(env) {
+  const c = await readCar(env);
+  return {
+    range_km: c.range_km, fuel_pct: c.fuel_pct, locked: c.locked, doors_open: c.doors_open || [],
+    tyres: c.tyres, tyres_low: c.tyres_low || [], battery_v: c.battery_v, odometer_km: c.odometer_km,
+    alerts: c.alerts || [], data_ts: c.data_ts || c.ts, circuit: c.circuit || null
+  };
 }
 
 async function circuitStats(env) {
@@ -1155,7 +1301,11 @@ async function listMaint(env) {
   const { results } = await env.DB.prepare('SELECT * FROM maintenance ORDER BY id').all();
   const now = Date.now();
   const order = { vencido: 0, pronto: 1, ok: 2, 'sin datos': 3 };
-  const items = results.map(i => maintStatus(i, odo, now)).sort((a, b) => order[a.status] - order[b.status] || b.pct - a.pct);
+  const items = (await Promise.all(results.map(i => brakeWear(env, i, odo)))).map(i => {
+    const o = maintStatus(i, odo, now);
+    const orig = results.find(r => r.id === i.id);
+    return { ...o, last_km: orig.last_km, last_date: orig.last_date };
+  }).sort((a, b) => order[a.status] - order[b.status] || b.pct - a.pct);
   return { odometer: odo, items };
 }
 

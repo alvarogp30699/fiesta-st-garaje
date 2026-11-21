@@ -127,7 +127,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let tyrePrefs = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -171,6 +171,8 @@ async function loadFor(t, force) {
   if (t === 'ajustes') add('guard', 30e3, async () => { guard = await api('/api/guard'); });
   if (t === 'ajustes') add('tyres', 300e3, async () => { tyrePrefs = await api('/api/tyres'); });
   if (t === 'estado' || t === 'datos') add('battery', 300e3, async () => { battery = await api('/api/battery'); });
+  if (t === 'taller') { add('tyreset', 60e3, async () => { tyreSet = await api('/api/tyreset'); }); add('deadlines', 60e3, async () => { deadlines = (await api('/api/deadlines')).items; }); }
+  if (t === 'viajes') add('trackdays', 120e3, async () => { trackdays = (await api('/api/trackdays')).days; });
   if (t === 'estado' || t === 'taller') add('maint', t === 'taller' ? 30e3 : 300e3, async () => { maint = await api('/api/maintenance'); });
   if (t === 'estado' || t === 'datos') add('fuel', 600e3, async () => {
     try { fuel = await api('/api/fuel?type=' + cfg.fuel); fuelErr = null; } catch (e) { fuelErr = e.message; }
@@ -464,6 +466,20 @@ function viewViajes() {
         <div class="col" style="gap:2px"><span class="k">Rpm máx.</span><span class="m" style="font-size:20px;font-weight:700">${nf(ci.top_rpm)}</span></div>
         <div class="col" style="gap:2px"><span class="k">En pista</span><span class="m" style="font-size:20px;font-weight:700">${nf(ci.km)} km</span></div>
       </div></div>`).join('');
+  if (trackdays && trackdays.length) html += `<div class="k" style="padding:6px 2px 0">Días de circuito</div>` + trackdays.map((d, i) => `
+    <div class="pn pad col" style="gap:10px">
+      <div class="row"><span style="font-size:15px;font-weight:600">${esc(d.circuit)}</span><span style="font-size:12px;color:#7d858f">${new Date(d.day).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
+      <div class="g3" style="gap:8px">
+        <div class="col" style="gap:2px"><span class="k">En pista</span><span class="m" style="font-size:18px;font-weight:700">${nf(d.km, 1)} km</span></div>
+        <div class="col" style="gap:2px"><span class="k">Punta</span><span class="m" style="font-size:18px;font-weight:700;color:${C.ac}">${nf(d.top_speed)}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Motor máx.</span><span class="m" style="font-size:18px;font-weight:700">${d.top_temp ? nf(d.top_temp) + '°' : '—'}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Tandas</span><span class="m" style="font-size:18px;font-weight:700">${d.sessions}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Gasolina</span><span class="m" style="font-size:18px;font-weight:700">${d.fuel_l != null ? nf(d.fuel_l, 1) + ' L' : '—'}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Coste</span><span class="m" style="font-size:18px;font-weight:700">${d.cost_eur != null ? nf(d.cost_eur, 2) + ' €' : '—'}</span></div>
+      </div>
+      ${d.note ? `<p style="margin:0;font-size:14px;white-space:pre-wrap;color:#c9ced4">${esc(d.note)}</p>` : ''}
+      <button class="btn sec" data-tracknote="${i}">${d.note ? 'Editar notas' : 'Añadir notas (presiones, reglajes…)'}</button>
+    </div>`).join('');
   let day = null, group = '';
   const flush = () => { if (day) html += `<div class="pn" style="padding:4px 16px"><div class="k" style="padding:12px 0 4px">${esc(day)}</div>${group}</div>`; };
   for (const t of trips) {
@@ -572,7 +588,7 @@ function viewTaller() {
     return `<div class="pn pad col" style="gap:10px">
       <div class="row"><span style="font-size:16px;font-weight:600">${esc(i.name)}</span><span class="tag" style="color:${col[i.status]};border-color:${col[i.status]}55">${lab[i.status]}</span></div>
       <div style="display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:3px">${segs}</div>
-      <div class="col" style="gap:2px"><span class="m" style="font-size:14px;font-weight:600">${esc(i.summary)}</span><span style="font-size:12px;color:#7d858f">${esc(last)}</span>${i.notes ? `<span style="font-size:12px;color:#7d858f">${esc(i.notes)}</span>` : ''}</div>
+      <div class="col" style="gap:2px"><span class="m" style="font-size:14px;font-weight:600">${esc(i.summary)}</span><span style="font-size:12px;color:#7d858f">${esc(last)}</span>${i.track_note ? `<span style="font-size:12px;color:${C.ac}">🏁 ${esc(i.track_note)}</span>` : ''}${i.notes ? `<span style="font-size:12px;color:#7d858f">${esc(i.notes)}</span>` : ''}</div>
       <div class="btns"><button class="btn sec" data-done="${i.id}">Hecho hoy</button><button class="btn sec" data-edit="${i.id}">Editar</button></div>
     </div>`;
   }).join('');
@@ -582,8 +598,40 @@ function viewTaller() {
     <span style="font-size:12px;color:#7d858f">El coche lo calcula según tu forma de conducir. Cuando llegue a 0 % toca cambiarlo.</span></div>` : ''}
   <div class="pn pad row"><div class="col" style="gap:4px"><span class="k">Odómetro</span><span class="m" style="font-size:26px;font-weight:700">${nf(maint.odometer)} km</span></div>
     <span style="font-size:12px;color:#7d858f;max-width:170px;text-align:right">Intervalos de ejemplo: ajústalos. Aviso a las 9:00 si faltan 1.000 km o 30 días.</span></div>
+  ${tyreCard()}
+  ${deadlineCard()}
   ${items}
   <button class="btn ghost" data-edit="new" style="min-height:52px">+ Añadir tarea</button>`;
+}
+
+function tyreCard() {
+  const t = tyreSet;
+  if (!t) return '';
+  if (!t.model && t.mounted_km == null) return `<button class="pn pad col" data-tyreset style="gap:6px;text-align:left"><span class="k">Neumáticos</span><span style="font-size:15px">Añade qué ruedas llevas y cuándo las montaste para contar sus km.</span></button>`;
+  const rot = t.rotate_in_km;
+  return `<div class="pn pad col" style="gap:10px">
+    <div class="row"><span class="k">Neumáticos</span>${rot != null ? `<span class="tag" style="color:${rot <= 0 ? C.wa : C.ok};border-color:${rot <= 0 ? C.wa : C.ok}55">${rot <= 0 ? 'Toca rotar' : 'Rotar en ' + nf(rot) + ' km'}</span>` : ''}</div>
+    <div class="col" style="gap:2px"><span style="font-size:16px;font-weight:600">${esc(t.model || 'Sin modelo')}</span><span class="muted">${esc(t.size || '')}${t.mounted_date ? ' · montadas el ' + new Date(t.mounted_date).toLocaleDateString('es-ES') : ''}</span></div>
+    <div class="g3" style="gap:8px">
+      <div class="col" style="gap:2px"><span class="k">Total</span><span class="m" style="font-size:20px;font-weight:700">${t.km != null ? nf(t.km) : '—'}<span style="font-size:12px;color:#7d858f"> km</span></span></div>
+      <div class="col" style="gap:2px"><span class="k">En circuito</span><span class="m" style="font-size:20px;font-weight:700;color:${C.ac}">${nf(t.track_km)}<span style="font-size:12px;color:#7d858f"> km</span></span></div>
+      <div class="col" style="gap:2px"><span class="k">Días pista</span><span class="m" style="font-size:20px;font-weight:700">${nf(t.track_days)}</span></div>
+    </div>
+    <div class="btns"><button class="btn sec" data-tyrerot>Rotadas hoy</button><button class="btn sec" data-tyreset>Editar</button></div>
+  </div>`;
+}
+
+function deadlineCard() {
+  if (!deadlines) return '';
+  const col = { vencido: C.bad, pronto: C.wa, ok: C.ok, 'sin datos': C.mu };
+  return `<div class="pn" style="padding:4px 16px">
+    <div class="k" style="padding:12px 0 4px">Fechas · aviso a 30, 7 y 1 día</div>
+    ${deadlines.map(d => `<button class="li" data-deadline="${esc(d.id)}" style="grid-template-columns:1fr auto">
+      <span class="col" style="gap:2px"><span style="font-size:15px;font-weight:600">${esc(d.name)}</span><span style="font-size:12px;color:#7d858f">${d.date ? new Date(d.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Toca para poner la fecha'}</span></span>
+      <span class="m" style="font-size:14px;font-weight:700;color:${col[d.status]}">${d.days == null ? '—' : d.days < 0 ? 'Vencido' : d.days === 0 ? 'Hoy' : d.days + ' días'}</span>
+    </button>`).join('')}
+    <button class="li" data-deadline="new" style="grid-template-columns:1fr;color:${C.ac};font-weight:600">+ Añadir fecha</button>
+  </div>`;
 }
 
 function viewAjustes() {
@@ -609,6 +657,11 @@ function viewAjustes() {
       ? `<p class="muted">Repostajes, neumáticos, batería, coche abierto, poco combustible, motor a temperatura, taller y resumen de los lunes.</p>
          <div class="btns"><button class="btn" id="pushOn">${pushOn ? 'Volver a activar' : 'Activar avisos'}</button><button class="btn sec" id="pushTest">Enviar prueba</button></div>`
       : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
+  </div>
+  <div class="pn pad col" style="gap:10px">
+    <span class="k">Widget en la pantalla de inicio</span>
+    <p class="muted">1. Instala la app gratuita <b>Scriptable</b> de la App Store.<br>2. Copia el código, abre Scriptable, toca + y pégalo.<br>3. Ejecútalo una vez: te pide la URL y la contraseña.<br>4. Mantén pulsado el escritorio → + → Scriptable → elige el script.</p>
+    <div class="btns"><button class="btn sec" id="copyWidget">Copiar código</button><a class="btn sec" href="https://apps.apple.com/app/scriptable/id1405459188">Scriptable</a></div>
   </div>
   <div class="pn pad col" style="gap:12px">
     <span class="k">Presiones de diario (bar)</span>
@@ -659,6 +712,36 @@ function sheetHtml() {
       <div class="g3">${[30, 60, 90, 120, 180].map(m => `<button type="button" class="btn sec" data-min="${m}" style="min-height:44px">${m < 60 ? m + ' min' : nf(m / 60, m % 60 ? 1 : 0) + ' h'}</button>`).join('')}<button type="button" class="btn danger" data-min="0" style="min-height:44px">Quitar</button></div>
       <p class="muted">Te aviso 10 minutos antes de que se acabe el tiempo.</p>
       <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Guardar nota</button></div>
+    </form>`;
+  }
+  if (sheet.type === 'tyreset') {
+    const t = tyreSet || {};
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">Neumáticos montados</span>
+      <label for="tyModel">Modelo<input id="tyModel" value="${esc(t.model || '')}" placeholder="Goodyear Eagle F1 SuperSport"></label>
+      <label for="tySize">Medida<input id="tySize" value="${esc(t.size || '')}" placeholder="225/40 R18"></label>
+      <div class="g2"><label for="tyDate">Montadas el<input id="tyDate" type="date" value="${esc(t.mounted_date || '')}"></label>
+      <label for="tyKm">Km al montarlas<input id="tyKm" inputmode="numeric" value="${t.mounted_km != null ? t.mounted_km : ''}" placeholder="${t.odometer != null ? t.odometer : ''}"></label></div>
+      <p class="muted">Si no recuerdas los km exactos, pon una aproximación. Aviso de rotar cada 10.000 km.</p>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+    </form>`;
+  }
+  if (sheet.type === 'deadline') {
+    const d = sheet.item || {};
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">${d.id ? esc(d.name) : 'Nueva fecha'}</span>
+      <label for="dName">Nombre<input id="dName" value="${esc(d.name || '')}" placeholder="Revisión del extintor"></label>
+      <label for="dDate">Vence el<input id="dDate" type="date" value="${esc(d.date || '')}"></label>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+      ${d.id ? '<button class="btn danger" type="button" id="dDelete">Quitar</button>' : ''}
+    </form>`;
+  }
+  if (sheet.type === 'tracknote') {
+    const d = sheet.item;
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">${esc(d.circuit)} · ${new Date(d.day).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</span>
+      <label for="tnNote">Notas del día<textarea id="tnNote" rows="7" style="font:15px var(--body);background:#0b0d10;color:var(--tx);border:1px solid var(--ln);border-radius:10px;padding:12px" placeholder="Presiones en frío/caliente, reglajes, tiempos, qué mejorar…">${esc(d.note || '')}</textarea></label>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
     </form>`;
   }
   const i = sheet.item || {};
@@ -788,6 +871,12 @@ function afterRender() {
     if (!parking) { try { parking = await api('/api/parking'); } catch (e) { error = e.message; render(); return; } }
     sheet = { type: 'parking' }; render();
   };
+  document.querySelectorAll('[data-tyreset]').forEach(b => b.onclick = () => { sheet = { type: 'tyreset' }; render(); });
+  document.querySelectorAll('[data-tyrerot]').forEach(b => b.onclick = async () => {
+    try { tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ rotated: true }) }); flash('Rotación apuntada'); render(); } catch (e) { error = e.message; render(); }
+  });
+  document.querySelectorAll('[data-deadline]').forEach(b => b.onclick = () => { sheet = { type: 'deadline', item: b.dataset.deadline === 'new' ? null : deadlines.find(d => d.id === b.dataset.deadline) }; render(); });
+  document.querySelectorAll('[data-tracknote]').forEach(b => b.onclick = () => { sheet = { type: 'tracknote', item: trackdays[+b.dataset.tracknote] }; render(); });
   document.querySelectorAll('[data-track]').forEach(b => b.onclick = async () => {
     const v = b.dataset.track;
     try {
@@ -840,6 +929,15 @@ function bindSettings() {
       loaded.guard = Date.now(); flash('Vigilancia guardada');
     } catch (e) { error = e.message; render(); }
   };
+  const cw = $('#copyWidget'); if (cw) cw.onclick = async () => {
+    try {
+      // Safari solo deja copiar dentro del toque: se le pasa la descarga como promesa.
+      const blob = fetch('herramientas/widget-scriptable.js', { cache: 'no-store' }).then(r => r.text()).then(t => new Blob([t], { type: 'text/plain' }));
+      if (window.ClipboardItem) await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      else await navigator.clipboard.writeText(await (await blob).text());
+      flash('Código copiado. Pégalo en Scriptable.');
+    } catch (e) { error = 'No se pudo copiar: ' + e.message; render(); }
+  };
   const ts = $('#tSave'); if (ts) ts.onclick = async () => {
     try {
       tyrePrefs = await api('/api/tyres', { method: 'POST', body: JSON.stringify({ front: $('#tFront').value, rear: $('#tRear').value }) });
@@ -881,7 +979,16 @@ function bindSheet() {
     e.preventDefault();
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
-      if (sheet.type === 'parking') {
+      if (sheet.type === 'tyreset') {
+        tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ model: $('#tyModel').value, size: $('#tySize').value, mounted_date: $('#tyDate').value, mounted_km: $('#tyKm').value }) });
+        sheet = null; flash('Neumáticos guardados');
+      } else if (sheet.type === 'deadline') {
+        deadlines = (await api('/api/deadlines', { method: 'POST', body: JSON.stringify({ id: sheet.item && sheet.item.id, name: $('#dName').value, date: $('#dDate').value }) })).items;
+        sheet = null; flash('Fecha guardada');
+      } else if (sheet.type === 'tracknote') {
+        await api('/api/trackdays/note', { method: 'POST', body: JSON.stringify({ day: sheet.item.day, circuit: sheet.item.circuit, note: $('#tnNote').value }) });
+        trackdays = (await api('/api/trackdays')).days; sheet = null; flash('Notas guardadas');
+      } else if (sheet.type === 'parking') {
         parking = await api('/api/parking', { method: 'POST', body: JSON.stringify({ note: $('#pNote').value.trim() }) });
         sheet = null; flash('Nota guardada');
       } else if (sheet.type === 'refuel') {
@@ -908,6 +1015,10 @@ function bindSheet() {
       sheet = null; flash(+b.dataset.min ? `Te aviso 10 minutos antes de que pasen ${b.textContent.trim()}` : 'Temporizador quitado');
     } catch (e) { error = e.message; sheet = null; render(); }
   });
+  const dd = $('#dDelete'); if (dd) dd.onclick = async () => {
+    try { deadlines = (await api('/api/deadlines/' + encodeURIComponent(sheet.item.id), { method: 'DELETE' })).items; sheet = null; flash('Fecha quitada'); }
+    catch (e) { error = e.message; sheet = null; render(); }
+  };
   const del = $('#mDelete'); if (del) del.onclick = async () => {
     if (del.dataset.confirm !== '1') { del.dataset.confirm = '1'; del.textContent = 'Toca otra vez para borrar'; return; }
     try { maint = await api('/api/maintenance/' + sheet.item.id, { method: 'DELETE' }); sheet = null; flash('Tarea borrada'); }
