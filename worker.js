@@ -39,6 +39,7 @@ export default {
       if (m === 'GET' && p === '/api/refuels') return json(await getRefuels(env));
       if (m === 'POST' && (mt = p.match(/^\/api\/refuels\/(\d+)$/))) return json(await updateRefuel(env, +mt[1], await req.json()));
       if (m === 'POST' && p === '/api/ford/connect') return json(await fordConnect(env, await req.json()));
+      if (m === 'POST' && p === '/api/ford/refresh') return json(await fordRefresh(env));
       if (m === 'GET' && p === '/api/ford/status') return json(await fordStatus(env));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
       if (m === 'POST' && p === '/api/guard') return json(await setGuard(env, await req.json()));
@@ -267,6 +268,25 @@ function mapTelemetry(data) {
     location: loc,
     metrics_count: Object.keys(m).length
   };
+}
+
+// Pide al coche que se despierte y mande datos nuevos (como hace la app de Ford al abrirla).
+// Limitado a una vez cada 10 minutos para no gastar batería.
+async function fordRefresh(env) {
+  if (src(env) !== 'ford') return { ok: false, error: 'Solo funciona con el coche real conectado.' };
+  const last = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_refresh_at'").first();
+  const wait = last ? 600e3 - (Date.now() - Number(last.v)) : 0;
+  if (wait > 0) return { ok: false, error: `Ya se pidió hace poco. Espera ${Math.ceil(wait / 60e3)} min para no gastar batería.` };
+  const f = await fordTokens(env);
+  const r = await fetch(`${FORD.TMC}/v1/command/vehicles/${f.vin}/commands`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + f.tmc, 'content-type': 'application/json', 'user-agent': FORD.UA },
+    body: JSON.stringify({ properties: {}, tags: {}, type: 'statusRefresh', wakeUp: true })
+  });
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford_refresh_at', ?)").bind(String(Date.now())).run();
+  await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
+  if (!r.ok) return { ok: false, error: `Ford no ha aceptado la petición (HTTP ${r.status}).` };
+  return { ok: true };
 }
 
 async function fordConnect(env, b) {

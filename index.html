@@ -342,8 +342,12 @@ function viewEstado(c) {
   const loc = c.location;
   const best = fuel && fuel.stations && fuel.stations[0];
   const [bTxt, bCol] = running ? (c.battery_v >= 13.5 ? ['Cargando', C.ok] : ['No carga', C.bad]) : c.battery_v >= 12.4 ? ['Correcta', C.ok] : c.battery_v >= 12.1 ? ['Baja', C.wa] : ['Muy baja', C.bad];
+  const age = Date.now() - (c.data_ts || c.ts);
+  const stale = c.source === 'ford' && !running && age > 15 * 60e3;
   return `
-  ${(c.alerts || []).map(a => `<div class="alert">${esc(a)}</div>`).join('')}
+  ${stale ? `<div class="pn pad row" style="gap:10px"><div class="col" style="gap:2px;min-width:0"><span class="k">Último dato del coche</span><span style="font-size:14px">${hm(c.data_ts)} · ${ago(c.data_ts)}. El coche está dormido.</span></div>
+    <button class="btn" id="refreshCar" style="min-height:44px;padding:0 12px;flex:none">Actualizar</button></div>` : ''}
+  ${(c.alerts || []).map(a => `<div class="alert">${esc(a)}${stale ? ` <span style="font-weight:500;opacity:.75">(dato de las ${hm(c.data_ts)})</span>` : ''}</div>`).join('')}
   <div class="pn" style="padding:16px 18px;display:flex;align-items:center;gap:16px">
     ${fuelArc(c.fuel_pct)}
     <div class="col" style="gap:6px">
@@ -753,6 +757,15 @@ function afterRender() {
   const pb = $('#parkBtn'); if (pb && live && live.ignition === 'off') pb.onclick = async () => {
     if (!parking) { try { parking = await api('/api/parking'); } catch (e) { error = e.message; render(); return; } }
     sheet = { type: 'parking' }; render();
+  };
+  const rc = $('#refreshCar'); if (rc) rc.onclick = async () => {
+    rc.disabled = true; rc.textContent = 'Pidiendo…';
+    try {
+      const r = await api('/api/ford/refresh', { method: 'POST' });
+      if (!r.ok) throw new Error(r.error);
+      flash('Pedido al coche. Los datos nuevos tardan en llegar entre 30 s y 2 min.');
+      [30e3, 60e3, 120e3].forEach(ms => setTimeout(loadLive, ms));
+    } catch (e) { error = e.message; render(); }
   };
   const db = $('#driveBtn'); if (db) db.onclick = () => { driveForced = true; renderDrive(); };
   bindSettings(); bindSheet();
