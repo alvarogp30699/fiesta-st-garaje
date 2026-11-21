@@ -38,6 +38,11 @@ export default {
       if (m === 'GET' && p === '/api/battery') return json(await getBattery(env, clampInt(url.searchParams.get('days'), 3, 90, 14)));
       if (m === 'GET' && p === '/api/refuels') return json(await getRefuels(env));
       if (m === 'POST' && (mt = p.match(/^\/api\/refuels\/(\d+)$/))) return json(await updateRefuel(env, +mt[1], await req.json()));
+      if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
+      if (m === 'POST' && p === '/api/guard') return json(await setGuard(env, await req.json()));
+      if (m === 'GET' && p === '/api/parking') return json(await getParking(env));
+      if (m === 'POST' && p === '/api/parking') return json(await setParking(env, await req.json()));
+      if (m === 'GET' && p === '/api/export') return json(await exportAll(env));
       if (m === 'GET' && p === '/api/trips/records') return json(await tripRecords(env));
       if (m === 'GET' && p === '/api/fuel') return json(await nearbyFuel(env, url.searchParams));
       if (m === 'GET' && p === '/api/trips') return json(await listTrips(env, clampInt(url.searchParams.get('limit'), 1, 200, 40)));
@@ -66,6 +71,7 @@ export default {
     if (poll) {
       try { await ingest(env, await readCar(env), st); } catch (e) { console.error('ingest', e); }
     }
+    await parkingTimer(env);
     await daily(env, event.scheduledTime);
   }
 };
@@ -203,6 +209,9 @@ function processCar(db, st, c, opts = {}) {
   // Trayectos
   if (running) {
     if (!st.trip) {
+      if (opts.guard && guardActive(opts.guard, c.ts)) {
+        notes.push({ title: '⚠️ El coche se ha encendido', body: `Tu Fiesta ST se ha puesto en marcha a las ${hhmm(c.ts)}. Si no eres tú, revisa dónde está.`, url: '#estado', tag: 'guard', urgent: true });
+      }
       st.trip = {
         start_ts: c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c,
         start: c.location ? [c.location.lat, c.location.lon] : null,
@@ -245,7 +254,12 @@ function processCar(db, st, c, opts = {}) {
           t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts)));
     }
     st.trip = null;
+    if (c.location) st.parked = { ts: c.ts, lat: c.location.lat, lon: c.location.lon };
+  } else if (opts.guard && c.location && st.parked && distKm(st.parked.lat, st.parked.lon, c.location.lat, c.location.lon) > 0.3 && !st.movedAlerted) {
+    st.movedAlerted = true;
+    notes.push({ title: '⚠️ El coche se ha movido', body: 'Se ha desplazado más de 300 m con el motor apagado (¿grúa?). Revisa la ubicación.', url: '#estado', tag: 'moved', urgent: true });
   }
+  if (running) st.movedAlerted = false;
 
   // Avisos (solo cuando aparecen)
   const cur = carAlerts(c);
@@ -262,7 +276,11 @@ function processCar(db, st, c, opts = {}) {
 
 async function ingest(env, car, st) {
   st = st || await loadState(env);
-  const { stmts, notes } = processCar(env.DB, st, car);
+  const guard = await getGuard(env);
+  const { stmts, notes } = processCar(env.DB, st, car, { guard });
+  if (st.trip == null && st.parked && st.parked.ts === car.ts) {
+    stmts.push(env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('parking', ?)").bind(JSON.stringify({ ...st.parked, note: null, timer_at: null })));
+  }
   const nr = st.newRefuel;
   delete st.newRefuel;
   if (nr && nr.lat != null) {
@@ -373,6 +391,7 @@ async function backfillMock(env) {
     ts += c.ignition !== 'off' ? 60e3 : 300e3;
   }
   delete st.newRefuel;
+  if (st.parked) all.push(db.prepare("INSERT OR REPLACE INTO kv VALUES ('parking', ?)").bind(JSON.stringify({ ...st.parked, note: null, timer_at: null })));
   all.push(stateStmt(db, st));
   all.push(db.prepare("INSERT OR REPLACE INTO kv VALUES ('demo', '1')"));
   for (let i = 0; i < all.length; i += 250) await db.batch(all.slice(i, i + 250));
@@ -456,12 +475,13 @@ async function listTrips(env, limit) {
     `SELECT id, start_ts, end_ts, km, duration_s, avg_speed, max_speed, max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l
      , points FROM trips ORDER BY start_ts DESC LIMIT ?`
   ).bind(limit).all();
+  const price = await priceFinder(env);
   return {
     trips: results.map(({ points, ...t }) => {
       const sp = JSON.parse(points || '[]').map(p => p[2]);
       const n = 16, spark = [];
       if (sp.length > 1) for (let i = 0; i < n; i++) spark.push(sp[Math.round(i * (sp.length - 1) / (n - 1))]);
-      return { ...t, spark };
+      return { ...t, spark, cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null };
     })
   };
 }
@@ -479,7 +499,96 @@ async function getTrip(env, id) {
     ).bind(id, t.start_lat, t.start_lon, t.end_lat, t.end_lon).first();
     if (r && r.n) route = { count: r.n, avg_duration_s: Math.round(r.dur), best_duration_s: r.best, avg_speed: Math.round(r.spd), avg_l100: r.km ? round(r.fuel / r.km * 100, 1) : null };
   }
-  return { ...t, points: JSON.parse(t.points || '[]'), route };
+  const price = await priceFinder(env);
+  if (route) route.avg_cost_eur = r2(route.avg_l100 != null ? route.avg_l100 / 100 * t.km * price(t.start_ts) : null);
+  return { ...t, points: JSON.parse(t.points || '[]'), route, cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+}
+
+const r2 = v => v == null ? null : Math.round(v * 100) / 100;
+const hhmm = ts => new Date(ts + 3600e3).toISOString().slice(11, 16);
+
+// Precio por litro para un momento dado: último repostaje con precio antes de esa fecha,
+// si no el más reciente, si no la media de gasolineras cercanas, si no 1,70 €/L.
+async function priceFinder(env) {
+  const { results } = await env.DB.prepare('SELECT ts, price_total / litres AS pl FROM refuels WHERE price_total > 0 AND litres > 0 ORDER BY ts').all();
+  let fallback = 1.70;
+  const fc = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_cache'").first();
+  if (fc) {
+    const key = 'p' + (env.FUEL_TYPE || '98');
+    const ps = JSON.parse(fc.v).list.map(s => s[key]).filter(Boolean);
+    if (ps.length) fallback = ps.reduce((a, b) => a + b, 0) / ps.length;
+  }
+  return ts => {
+    let p = null;
+    for (const r of results) { if (r.ts <= ts) p = r.pl; else break; }
+    return p ?? (results.length ? results[results.length - 1].pl : fallback);
+  };
+}
+
+// ---------- Vigilancia y aparcamiento ----------
+
+async function getGuard(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'guard'").first();
+  return { enabled: false, night: true, from: '00:00', to: '06:00', ...(row ? JSON.parse(row.v) : {}) };
+}
+
+async function setGuard(env, b) {
+  const t = v => (/^\d{2}:\d{2}$/.test(v || '') ? v : null);
+  const g = { ...(await getGuard(env)) };
+  if (typeof b.enabled === 'boolean') g.enabled = b.enabled;
+  if (typeof b.night === 'boolean') g.night = b.night;
+  if (t(b.from)) g.from = b.from;
+  if (t(b.to)) g.to = b.to;
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('guard', ?)").bind(JSON.stringify(g)).run();
+  return g;
+}
+
+function guardActive(g, ts) {
+  if (g.enabled) return true;
+  if (!g.night) return false;
+  const now = hhmm(ts);
+  return g.from <= g.to ? now >= g.from && now < g.to : now >= g.from || now < g.to;
+}
+
+async function getParking(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'parking'").first();
+  return row ? JSON.parse(row.v) : null;
+}
+
+async function setParking(env, b) {
+  const p = await getParking(env);
+  if (!p) throw httpError('Todavía no hay ningún aparcamiento guardado', 404);
+  if ('note' in b) p.note = b.note ? String(b.note).slice(0, 120) : null;
+  if ('minutes' in b) {
+    const min = Number(b.minutes);
+    p.timer_at = min > 0 && min <= 24 * 60 ? Date.now() + min * 60e3 : null;
+    p.timer_warned = false;
+  }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('parking', ?)").bind(JSON.stringify(p)).run();
+  return p;
+}
+
+async function parkingTimer(env) {
+  const p = await getParking(env);
+  if (!p || !p.timer_at) return;
+  const left = p.timer_at - Date.now();
+  if (left <= 10 * 60e3 && !p.timer_warned) {
+    p.timer_warned = true;
+    await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('parking', ?)").bind(JSON.stringify(p)).run();
+    await sendPushAll(env, { title: 'Aparcamiento', body: left > 60e3 ? `Te quedan ${Math.round(left / 60e3)} minutos de aparcamiento.` : 'Se ha acabado el tiempo de aparcamiento.', url: '#estado', tag: 'parking', urgent: true });
+  }
+}
+
+async function exportAll(env) {
+  const all = async sql => (await env.DB.prepare(sql).all()).results;
+  const [snapshots, refuels, trips, maintenance, kv] = await Promise.all([
+    all('SELECT ts, odometer, fuel_pct, battery_v, data FROM snapshots ORDER BY ts'),
+    all('SELECT * FROM refuels ORDER BY ts'),
+    all('SELECT * FROM trips ORDER BY start_ts'),
+    all('SELECT * FROM maintenance ORDER BY id'),
+    all("SELECT k, v FROM kv WHERE k IN ('guard', 'parking')")
+  ]);
+  return { app: 'fiesta-st-garaje', schema: SCHEMA, exported_at: new Date().toISOString(), source: env.SOURCE || 'mock', snapshots, refuels, trips, maintenance, settings: kv };
 }
 
 async function tripRecords(env) {
@@ -735,7 +844,7 @@ async function sendPushAll(env, note) {
           'Content-Encoding': 'aes128gcm',
           'Content-Type': 'application/octet-stream',
           TTL: '86400',
-          Urgency: 'high',
+          Urgency: note.urgent ? 'high' : 'normal',
           Authorization: await vapidAuth(env, sub.endpoint)
         },
         body

@@ -127,7 +127,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let driveDismissed = false, driveForced = false;
+let driveDismissed = false, driveForced = false, parking = null, guard = null;
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -167,6 +167,8 @@ const stale = (key, ms) => !loaded[key] || Date.now() - loaded[key] > ms;
 async function loadFor(t, force) {
   const jobs = [];
   const add = (key, ms, fn) => { if (force || stale(key, ms)) jobs.push(fn().then(() => { loaded[key] = Date.now(); })); };
+  if (t === 'estado') add('parking', 30e3, async () => { parking = await api('/api/parking'); });
+  if (t === 'ajustes') add('guard', 30e3, async () => { guard = await api('/api/guard'); });
   if (t === 'estado' || t === 'datos') add('battery', 300e3, async () => { battery = await api('/api/battery'); });
   if (t === 'estado' || t === 'taller') add('maint', t === 'taller' ? 30e3 : 300e3, async () => { maint = await api('/api/maintenance'); });
   if (t === 'estado' || t === 'datos') add('fuel', 600e3, async () => {
@@ -361,7 +363,11 @@ function viewEstado(c) {
   </div>
   ${loc ? `<div class="pn" style="padding:10px;display:flex;align-items:center;gap:12px">
     <div id="parkMapHost" class="mini"></div>
-    <div class="col" style="flex:1;gap:2px;min-width:0"><span class="k">${running ? 'En marcha' : 'Aparcado'}</span><span style="font-size:15px;font-weight:600">${running ? 'Posición en directo' : 'Actualizado ' + ago(c.ts)}</span><span style="font-size:10px;color:#4b525a">© OpenStreetMap · © CARTO</span></div>
+    <button id="parkBtn" class="col" style="flex:1;gap:2px;min-width:0;background:none;border:0;text-align:left;padding:0" aria-label="Nota y temporizador de aparcamiento">
+      <span class="k">${running ? 'En marcha' : 'Aparcado'}${!running && parking && parking.timer_at ? ` · <span style="color:${parking.timer_at - Date.now() < 10 * 60e3 ? C.bad : C.ac}">${Math.max(0, Math.round((parking.timer_at - Date.now()) / 60e3))} min</span>` : ''}</span>
+      <span style="font-size:15px;font-weight:600">${running ? 'Posición en directo' : parking ? 'Desde las ' + hm(parking.ts) + (dayLabel(parking.ts) !== 'Hoy' ? ' · ' + esc(dayLabel(parking.ts)) : '') : 'Actualizado ' + ago(c.ts)}</span>
+      <span style="font-size:12px;color:${C.mu}">${!running && parking && parking.note ? esc(parking.note) : running ? '' : 'Toca para añadir nota o temporizador'}</span>
+    </button>
     <a class="btn" href="https://maps.apple.com/?daddr=${loc.lat},${loc.lon}&dirflg=w" aria-label="Cómo llegar andando al coche">IR</a>
   </div>` : ''}
   ${best ? `<div class="pn pad col" style="gap:8px">
@@ -425,7 +431,7 @@ function viewViajes() {
   let html = `<div class="pn pad g3" style="gap:8px">
     <div class="col" style="gap:4px"><span class="k">7 días</span><span class="m" style="font-size:24px;font-weight:700">${nf(km)} <span style="font-size:12px;color:#7d858f">km</span></span></div>
     <div class="col" style="gap:4px"><span class="k">Al volante</span><span class="m" style="font-size:24px;font-weight:700">${clock(secs)}</span></div>
-    <div class="col" style="gap:4px"><span class="k">Punta</span><span class="m" style="font-size:24px;font-weight:700">${nf(top)} <span style="font-size:12px;color:#7d858f">km/h</span></span></div>
+    <div class="col" style="gap:4px"><span class="k">Coste</span><span class="m" style="font-size:24px;font-weight:700">${nf(wk.reduce((s, t) => s + (t.cost_eur || 0), 0), 0)} <span style="font-size:12px;color:#7d858f">€</span></span></div>
   </div>`;
   if (records && records.top_speed) html += `<div class="k" style="padding:6px 2px 0">Récords</div><div class="g2">
     ${rec('Velocidad punta', records.top_speed, nf(records.top_speed?.max_speed), 'km/h')}
@@ -439,7 +445,7 @@ function viewViajes() {
     if (d !== day) { flush(); day = d; group = ''; }
     group += `<button class="li" data-trip="${t.id}" style="grid-template-columns:34px 1fr 92px">
       <span class="m" style="font-size:13px;color:#7d858f;font-weight:600">#${pad2(t.id)}</span>
-      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)} · máx. ${nf(t.max_speed)} km/h</span></span>
+      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)} · máx. ${nf(t.max_speed)}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
       <span class="col" style="gap:4px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${nf(t.km, 1)} km</span>${spark(t.spark)}</span>
     </button>`;
   }
@@ -461,7 +467,7 @@ function viewTrip(t) {
       <div class="g3" style="gap:8px">
         <div class="col" style="gap:2px"><span class="k">Media</span><span class="m" style="font-size:16px;font-weight:600">${clock(t.route.avg_duration_s)}</span></div>
         <div class="col" style="gap:2px"><span class="k">Mejor</span><span class="m" style="font-size:16px;font-weight:600">${clock(Math.min(t.route.best_duration_s, t.duration_s))}</span></div>
-        <div class="col" style="gap:2px"><span class="k">l/100</span><span class="m" style="font-size:16px;font-weight:600">${nf(t.route.avg_l100, 1)}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Coste medio</span><span class="m" style="font-size:16px;font-weight:600">${t.route.avg_cost_eur != null ? nf(t.route.avg_cost_eur, 2) + ' €' : '—'}</span></div>
       </div></div>`;
   }
   return `
@@ -475,7 +481,9 @@ function viewTrip(t) {
     ${trow('Régimen máximo', nf(t.max_rpm), 'rpm')}${trow('Aceite máximo', nf(t.max_oil), '°C')}
     ${trow('Acelerador medio', nf(t.avg_throttle), '%')}${trow('Sobre 4.000 rpm', nf(t.rpm_high_pct), '%')}
     ${trow('Consumo estimado', l100 ? nf(l100, 1) : '—', 'l/100')}
+    ${trow('Coste del trayecto', t.cost_eur != null ? nf(t.cost_eur, 2) : '—', '€', true)}
   </div>
+  ${t.price_l ? `<p class="muted" style="padding:0 4px">Coste calculado con ${nf(t.price_l, 3)} €/L (tu último repostaje con precio, o la media de gasolineras cercanas).</p>` : ''}
   <div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>`;
 }
 
@@ -571,6 +579,19 @@ function viewAjustes() {
          <div class="btns"><button class="btn" id="pushOn">${pushOn ? 'Volver a activar' : 'Activar avisos'}</button><button class="btn sec" id="pushTest">Enviar prueba</button></div>`
       : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
   </div>
+  <div class="pn pad col" style="gap:12px">
+    <span class="k">Vigilancia</span>
+    ${guard ? `
+    <label style="flex-direction:row;align-items:center;justify-content:space-between;text-transform:none;letter-spacing:0;font:500 15px var(--body);color:var(--tx)">Siempre activa<input type="checkbox" id="gEnabled" ${guard.enabled ? 'checked' : ''} style="width:auto;accent-color:${C.ac};transform:scale(1.4)"></label>
+    <label style="flex-direction:row;align-items:center;justify-content:space-between;text-transform:none;letter-spacing:0;font:500 15px var(--body);color:var(--tx)">Solo de noche<input type="checkbox" id="gNight" ${guard.night ? 'checked' : ''} style="width:auto;accent-color:${C.ac};transform:scale(1.4)"></label>
+    <div class="g2"><label for="gFrom">Desde<input id="gFrom" type="time" value="${guard.from}"></label><label for="gTo">Hasta<input id="gTo" type="time" value="${guard.to}"></label></div>
+    <p class="muted">Te aviso si el coche arranca mientras está activa, y siempre que se mueva más de 300 m con el motor apagado.</p>` : '<p class="muted">Cargando…</p>'}
+  </div>
+  <div class="pn pad col" style="gap:10px">
+    <span class="k">Copia de seguridad</span>
+    <p class="muted">Descarga todos tus datos (histórico, trayectos, repostajes y taller) en un archivo. Guárdalo en Archivos o iCloud.</p>
+    <button class="btn sec" id="backupBtn">Descargar copia</button>
+  </div>
   <button class="btn sec" id="cancelCfg">Volver</button>` : ''}
   <p class="muted">La conexión se guarda solo en este móvil.</p>`;
 }
@@ -586,6 +607,18 @@ function sheetHtml() {
       <label for="sPrice">Precio total (€)<input id="sPrice" inputmode="decimal" value="${r.price_total != null ? nf(r.price_total, 2) : ''}" placeholder="52,30"></label>
       <label for="sStation">Gasolinera<input id="sStation" value="${esc(r.station || '')}" placeholder="Repsol Salou"></label>
       <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+    </form>`;
+  }
+  if (sheet.type === 'parking') {
+    const p = parking || {};
+    const left = p.timer_at ? Math.max(0, Math.round((p.timer_at - Date.now()) / 60e3)) : null;
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">Aparcado desde las ${p.ts ? hm(p.ts) : '—'}</span>
+      <label for="pNote">Nota<input id="pNote" value="${esc(p.note || '')}" placeholder="Planta -2, plaza 34"></label>
+      <span class="k">Avisarme antes de que acabe la zona azul${left != null ? ` · quedan ${left} min` : ''}</span>
+      <div class="g3">${[30, 60, 90, 120, 180].map(m => `<button type="button" class="btn sec" data-min="${m}" style="min-height:44px">${m < 60 ? m + ' min' : nf(m / 60, m % 60 ? 1 : 0) + ' h'}</button>`).join('')}<button type="button" class="btn danger" data-min="0" style="min-height:44px">Quitar</button></div>
+      <p class="muted">Te aviso 10 minutos antes de que se acabe el tiempo.</p>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Guardar nota</button></div>
     </form>`;
   }
   const i = sheet.item || {};
@@ -710,6 +743,10 @@ function afterRender() {
   });
   document.querySelectorAll('[data-fuel]').forEach(b => b.onclick = () => { cfg.fuel = b.dataset.fuel; saveCfg(); fuel = null; loaded.fuel = 0; render(); });
   const csv = $('#copyCsv'); if (csv) csv.onclick = copyCsv;
+  const pb = $('#parkBtn'); if (pb && live && live.ignition === 'off') pb.onclick = async () => {
+    if (!parking) { try { parking = await api('/api/parking'); } catch (e) { error = e.message; render(); return; } }
+    sheet = { type: 'parking' }; render();
+  };
   const db = $('#driveBtn'); if (db) db.onclick = () => { driveForced = true; renderDrive(); };
   bindSettings(); bindSheet();
 }
@@ -725,6 +762,24 @@ function bindSettings() {
     go('estado'); loadLive();
   };
   const cancel = $('#cancelCfg'); if (cancel) cancel.onclick = () => go('estado');
+  const saveGuard = async () => {
+    try {
+      guard = await api('/api/guard', { method: 'POST', body: JSON.stringify({ enabled: $('#gEnabled').checked, night: $('#gNight').checked, from: $('#gFrom').value, to: $('#gTo').value }) });
+      loaded.guard = Date.now(); flash('Vigilancia guardada');
+    } catch (e) { error = e.message; render(); }
+  };
+  ['#gEnabled', '#gNight', '#gFrom', '#gTo'].forEach(id => { const el = $(id); if (el) el.onchange = saveGuard; });
+  const bk = $('#backupBtn'); if (bk) bk.onclick = async () => {
+    bk.disabled = true; bk.textContent = 'Preparando…';
+    try {
+      const data = await api('/api/export');
+      const name = `fiesta-st-copia-${new Date().toISOString().slice(0, 10)}.json`;
+      const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
+      else { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+      flash('Copia lista: ' + nf(data.snapshots.length) + ' registros y ' + nf(data.trips.length) + ' trayectos');
+    } catch (e) { if (e.name !== 'AbortError') { error = e.message; render(); } else { bk.disabled = false; bk.textContent = 'Descargar copia'; } }
+  };
   const on = $('#pushOn'); if (on) on.onclick = async () => {
     on.disabled = true;
     try { await enablePush(); flash('Avisos activados en este móvil'); } catch (e) { error = e.message; render(); }
@@ -748,7 +803,10 @@ function bindSheet() {
     e.preventDefault();
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
-      if (sheet.type === 'refuel') {
+      if (sheet.type === 'parking') {
+        parking = await api('/api/parking', { method: 'POST', body: JSON.stringify({ note: $('#pNote').value.trim() }) });
+        sheet = null; flash('Nota guardada');
+      } else if (sheet.type === 'refuel') {
         const price = $('#sPrice').value.trim();
         await api('/api/refuels/' + sheet.item.ts, { method: 'POST', body: JSON.stringify({ price_total: price ? num(price) : null, station: $('#sStation').value.trim() }) });
         refuels = await api('/api/refuels'); loaded.datos = Date.now();
@@ -766,6 +824,12 @@ function bindSheet() {
       m.textContent = err.message;
     }
   };
+  form.querySelectorAll('[data-min]').forEach(b => b.onclick = async () => {
+    try {
+      parking = await api('/api/parking', { method: 'POST', body: JSON.stringify({ minutes: +b.dataset.min }) });
+      sheet = null; flash(+b.dataset.min ? `Te aviso 10 minutos antes de que pasen ${b.textContent.trim()}` : 'Temporizador quitado');
+    } catch (e) { error = e.message; sheet = null; render(); }
+  });
   const del = $('#mDelete'); if (del) del.onclick = async () => {
     if (del.dataset.confirm !== '1') { del.dataset.confirm = '1'; del.textContent = 'Toca otra vez para borrar'; return; }
     try { maint = await api('/api/maintenance/' + sheet.item.id, { method: 'DELETE' }); sheet = null; flash('Tarea borrada'); }
@@ -807,7 +871,7 @@ function go(t) {
   if (t !== 'viajes') tripDetail = null;
   if (TABS.includes(t) && location.hash !== '#' + t) history.replaceState(null, '', '#' + t);
   render();
-  if (t === 'ajustes') clearTimeout(timer); else { loadFor(t); schedule(); }
+  if (t === 'ajustes') { clearTimeout(timer); if (cfg.url) loadFor('ajustes'); } else { loadFor(t); schedule(); }
 }
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
   if (b.dataset.tab === 'viajes' && tab === 'viajes') tripDetail = null;
