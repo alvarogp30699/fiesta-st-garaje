@@ -44,7 +44,7 @@ function txt(stack, s, size, color, weight = 'medium', mono = false) {
   return t;
 }
 
-function label(stack, s) { return txt(stack, s.toUpperCase(), 9, MU, 'bold'); }
+function label(stack, s) { return txt(stack, s.toUpperCase(), 9, new Color('#b3bac2'), 'bold'); }
 
 function bar(stack, pct, width, color) {
   const c = new DrawContext();
@@ -72,7 +72,14 @@ async function background(file) {
   if (!img) return null;
   const c = new DrawContext(); c.size = img.size; c.opaque = true;
   c.drawImageInRect(img, new Rect(0, 0, img.size.width, img.size.height));
-  c.setFillColor(new Color('#000000', 0.58)); c.fillRect(new Rect(0, 0, img.size.width, img.size.height));
+  const W = img.size.width, H = img.size.height;
+  c.setFillColor(new Color('#000000', 0.62)); c.fillRect(new Rect(0, 0, W, H));
+  // Más oscuro arriba (donde va el texto) que abajo (donde se ve el coche)
+  const steps = 24;
+  for (let i = 0; i < steps; i++) {
+    const a = 0.28 * (1 - i / steps);
+    c.setFillColor(new Color('#000000', a)); c.fillRect(new Rect(0, (H * 0.75 / steps) * i, W, H * 0.75 / steps + 1));
+  }
   return c.getImage();
 }
 w.url = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
@@ -121,11 +128,11 @@ if (!d) {
   const c1 = body.addStack(); c1.layoutVertically(); c1.size = new Size(112, 0);
   label(c1, 'Autonomía');
   const r = c1.addStack(); r.bottomAlignContent();
-  txt(r, n0(d.range_km), 30, TX, 'bold', true); r.addSpacer(3); txt(r, 'km', 12, MU);
+  txt(r, n0(d.range_km), 30, TX, 'bold', true); r.addSpacer(3); txt(r, 'km', 13, new Color('#c9ced4'), 'bold');
   c1.addSpacer(4);
   bar(c1, d.fuel_pct ?? 0, 100, (d.fuel_pct ?? 100) < 15 ? WA : AC);
   c1.addSpacer(3);
-  txt(c1, `Depósito ${n0(d.fuel_pct)} %`, 11, MU);
+  txt(c1, `Depósito ${n0(d.fuel_pct)} %`, 11, new Color('#c9ced4'));
   if (d.doors_open && d.doors_open.length) { c1.addSpacer(2); txt(c1, 'Puerta abierta', 11, WA, 'bold'); }
 
   body.addSpacer(10);
@@ -148,7 +155,7 @@ if (!d) {
 
   // Columna 3: motor, batería, aceite, km
   const c3 = body.addStack(); c3.layoutVertically();
-  const kv = (k, v, col = TX) => { const s = c3.addStack(); txt(s, k, 11, MU); s.addSpacer(); txt(s, v, 11, col, 'bold', true); c3.addSpacer(3); };
+  const kv = (k, v, col = TX) => { const s = c3.addStack(); txt(s, k, 11, new Color('#c9ced4')); s.addSpacer(); txt(s, v, 11, col, 'bold', true); c3.addSpacer(3); };
   const eng = d.engine_c;
   kv('Motor', eng == null ? '—' : `${eng}°`, eng == null ? TX : eng < 60 ? new Color('#4aa3ff') : eng > 110 ? BAD : TX);
   kv('Batería', d.battery_v == null ? '—' : `${f2(d.battery_v)} V`, d.battery_v != null && d.battery_v < 12.2 ? WA : TX);
@@ -159,8 +166,11 @@ if (!d) {
 
   // Pie: aviso o lo próximo del taller, y cuándo son los datos
   const foot = w.addStack(); foot.centerAlignContent();
-  const alert = (d.alerts || [])[0];
-  if (alert) txt(foot, '⚠︎ ' + alert, 10, WA, 'medium');
+  const NAMES = { fl: 'del. izq.', fr: 'del. der.', rl: 'tras. izq.', rr: 'tras. der.' };
+  const lowK = (d.tyres_low || [])[0];
+  const alert = lowK ? `Rueda ${NAMES[lowK]} baja: ${f2((d.tyres || {})[lowK])} bar` + ((d.tyres_low || []).length > 1 ? ` (+${d.tyres_low.length - 1})` : '')
+    : (d.alerts || [])[0];
+  if (alert) txt(foot, '⚠︎ ' + alert, 11, WA, 'bold');
   else if (d.next) txt(foot, '🔧 ' + d.next.text, 10, d.next.urgent ? WA : MU, 'medium');
   foot.addSpacer();
   txt(foot, ago(d.data_ts), 10, MU, 'regular');
