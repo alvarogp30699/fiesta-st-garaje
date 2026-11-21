@@ -4,13 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Fiesta ST">
 <meta name="theme-color" content="#0f1316">
 <title>Fiesta ST Garaje</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 :root{
   --bg:#0f1316; --panel:#181e23; --line:#26303a; --text:#eef2f5; --muted:#9aa7b2;
@@ -20,11 +24,12 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--body);-webkit-text-size-adjust:100%}
 body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
-header{padding:16px 20px 10px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
-main{flex:1;min-height:0;overflow-y:auto;padding:4px 16px 20px;display:flex;flex-direction:column;gap:12px;-webkit-overflow-scrolling:touch}
-nav{display:flex;gap:6px;border-top:1px solid var(--line);background:#12171b;padding:6px 8px calc(8px + env(safe-area-inset-bottom))}
-nav button{flex:1;min-height:48px;border:0;border-radius:10px;font:600 15px var(--body);background:transparent;color:var(--muted)}
+header{padding:14px 20px 10px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+main{flex:1;min-height:0;overflow-y:auto;padding:4px 16px 24px;display:flex;flex-direction:column;gap:12px;-webkit-overflow-scrolling:touch}
+nav{display:flex;gap:4px;border-top:1px solid var(--line);background:#12171b;padding:6px 6px calc(8px + env(safe-area-inset-bottom))}
+nav button{flex:1;min-width:0;min-height:48px;border:0;border-radius:10px;font:600 14px var(--body);background:transparent;color:var(--muted);padding:0 2px}
 nav button.on{background:var(--accent);color:#1a0d02}
+button{cursor:pointer;font-family:var(--body)}
 button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
 .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -32,8 +37,9 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .big{font-family:var(--display);font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
 .muted{color:var(--muted);font-size:13px;margin:0}
 .row{display:flex;justify-content:space-between;align-items:center;gap:12px}
-.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;align-self:flex-start}
-.p-ok{background:#12301f;color:var(--ok)} .p-warn{background:#2a2113;color:var(--warn)} .p-bad{background:#331616;color:var(--bad)} .p-live{background:#33190a;color:var(--accent)}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;align-self:flex-start;white-space:nowrap}
+.p-ok{background:#12301f;color:var(--ok)} .p-warn{background:#2a2113;color:var(--warn)} .p-bad{background:#331616;color:var(--bad)} .p-live{background:#33190a;color:var(--accent)} .p-mute{background:#222a31;color:var(--muted)}
+.alert{border-radius:12px;padding:12px 14px;font-size:14px;font-weight:600;background:#2a2113;color:var(--warn)}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 1.4s infinite}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.dot{animation:none}}
@@ -42,18 +48,33 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .icon-btn{width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--text);display:grid;place-items:center}
 a{color:var(--accent)}
 label{display:flex;flex-direction:column;gap:6px;font-size:14px;color:var(--muted)}
-input{font:16px var(--body);padding:12px;border-radius:10px;border:1px solid var(--line);background:#0f1316;color:var(--text)}
-.btn{min-height:48px;border:0;border-radius:10px;font:600 16px var(--body);background:var(--accent);color:#1a0d02}
+input{font:16px var(--body);padding:12px;border-radius:10px;border:1px solid var(--line);background:#0f1316;color:var(--text);width:100%}
+.btn{min-height:48px;border:0;border-radius:10px;font:600 16px var(--body);background:var(--accent);color:#1a0d02;padding:0 16px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
 .btn.sec{background:transparent;color:var(--text);border:1px solid var(--line)}
+.btn.sm{min-height:44px;font-size:14px}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid #4a2222}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.btns>*{flex:1}
 .err{background:#331616;color:#ffb3b3;border-radius:12px;padding:12px 14px;font-size:14px}
+.okmsg{background:#12301f;color:#a9f0cf;border-radius:12px;padding:12px 14px;font-size:14px}
+.map{height:200px;border-radius:10px;overflow:hidden;background:#0b0f12}
+.map.tall{height:280px}
+.list-item{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);color:var(--text);padding:12px 0}
+.list-item:first-of-type{border-top:0;padding-top:0}
+.stat{display:flex;flex-direction:column;gap:4px}
+.stat .big{font-size:26px}
 svg text{fill:var(--muted);font:11px var(--body)}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:2000}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:18px 18px 0 0;width:100%;max-width:520px;max-height:90%;overflow-y:auto;padding:20px 16px calc(20px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:14px}
+.leaflet-container{background:#0b0f12;font-family:var(--body)}
+.leaflet-control-attribution{font-size:9px}
 </style>
 </head>
 <body>
 <header>
   <div>
     <div class="lbl">Ford Fiesta ST Mk8</div>
-    <div class="big" style="font-size:34px">Mi Fiesta ST</div>
+    <div class="big" style="font-size:32px;white-space:nowrap">Mi Fiesta ST</div>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <span id="badge"></span>
@@ -65,41 +86,66 @@ svg text{fill:var(--muted);font:11px var(--body)}
 <main id="main"></main>
 <nav id="nav">
   <button data-tab="estado">Estado</button>
+  <button data-tab="viajes">Viajes</button>
   <button data-tab="motor">Motor</button>
-  <button data-tab="historial">Histórico</button>
+  <button data-tab="datos">Datos</button>
+  <button data-tab="taller">Taller</button>
 </nav>
+<div id="sheetHost"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const $ = s => document.querySelector(s);
-const nf = (v, d = 0) => v == null ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const nf = (v, d = 0) => v == null || isNaN(v) ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? null : n; };
+const TABS = ['estado', 'viajes', 'motor', 'datos', 'taller'];
+const TILE = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const ATTR = '&copy; OpenStreetMap &copy; CARTO';
+const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
 let cfg = {};
 try { cfg = JSON.parse(localStorage.getItem('fst_cfg') || '{}'); } catch (e) {}
-let tab = cfg.url && cfg.key ? 'estado' : 'ajustes';
-let live = null, hist = null, refuels = null, error = null, timer = null, histLoaded = 0;
+const hashTab = location.hash.slice(1);
+let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
+let live = null, hist = null, battery = null, refuels = null, trips = null, tripDetail = null, maint = null;
+let error = null, notice = null, timer = null, sheet = null, loaded = {};
 
-async function api(path) {
-  const r = await fetch(cfg.url.replace(/\/+$/, '') + path, { headers: { 'x-app-key': cfg.key } });
+// ---------- API ----------
+async function api(path, opts = {}) {
+  const headers = { 'x-app-key': cfg.key };
+  if (opts.body) headers['content-type'] = 'application/json';
+  let r;
+  try { r = await fetch(cfg.url.replace(/\/+$/, '') + path, { ...opts, headers }); }
+  catch (e) { throw new Error('No se puede conectar con el servidor. Revisa la URL en Ajustes o tu conexión.'); }
   const j = await r.json().catch(() => ({ error: 'El servidor no ha devuelto datos válidos' }));
   if (!r.ok) throw new Error(j.error || 'Error ' + r.status);
   return j;
 }
 
 async function loadLive() {
-  try { live = await api('/api/live'); error = null; }
-  catch (e) { error = e.message === 'Failed to fetch' ? 'No se puede conectar con el servidor. Revisa la URL en Ajustes.' : e.message; }
-  render();
+  try { live = await api('/api/live'); error = null; } catch (e) { error = e.message; }
+  if (!sheet && ['estado', 'motor'].includes(tab)) render(); else renderBadge();
   schedule();
 }
 
-async function loadHistory(force) {
-  if (!force && Date.now() - histLoaded < 120e3) return;
-  try {
-    [hist, refuels] = await Promise.all([api('/api/history?days=7'), api('/api/refuels')]);
-    histLoaded = Date.now(); error = null;
-  } catch (e) { error = e.message; }
-  render();
+function stale(key, ms) { return !loaded[key] || Date.now() - loaded[key] > ms; }
+
+async function loadFor(t, force) {
+  const jobs = [];
+  if ((t === 'estado' || t === 'datos') && (force || stale('battery', 300e3)))
+    jobs.push(api('/api/battery').then(r => { battery = r; loaded.battery = Date.now(); }));
+  if (t === 'estado' && (force || stale('maint', 300e3)))
+    jobs.push(api('/api/maintenance').then(r => { maint = r; loaded.maint = Date.now(); }));
+  if (t === 'viajes' && (force || stale('trips', 60e3)))
+    jobs.push(api('/api/trips?limit=60').then(r => { trips = r.trips; loaded.trips = Date.now(); }));
+  if (t === 'datos' && (force || stale('datos', 120e3)))
+    jobs.push(Promise.all([api('/api/history?days=7'), api('/api/refuels')]).then(([h, r]) => { hist = h; refuels = r; loaded.datos = Date.now(); }));
+  if (t === 'taller' && (force || stale('maint', 30e3)))
+    jobs.push(api('/api/maintenance').then(r => { maint = r; loaded.maint = Date.now(); }));
+  if (!jobs.length) return;
+  try { await Promise.all(jobs); error = null; } catch (e) { error = e.message; }
+  if (tab === t && !sheet) render();
 }
 
 function schedule() {
@@ -109,6 +155,7 @@ function schedule() {
   timer = setTimeout(loadLive, running ? 5000 : 60000);
 }
 
+// ---------- Formatos ----------
 function ago(ts) {
   const s = Math.round((Date.now() - ts) / 1000);
   if (s < 60) return 'hace ' + Math.max(s, 0) + ' s';
@@ -116,6 +163,16 @@ function ago(ts) {
   if (s < 86400) return 'hace ' + Math.round(s / 3600) + ' h';
   return 'hace ' + Math.round(s / 86400) + ' d';
 }
+const hm = ts => new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+function dayLabel(ts) {
+  const d = new Date(ts), t = new Date();
+  const k = x => x.toDateString();
+  if (k(d) === k(t)) return 'Hoy';
+  const y = new Date(t); y.setDate(t.getDate() - 1);
+  if (k(d) === k(y)) return 'Ayer';
+  return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' });
+}
+const dur = s => s < 3600 ? Math.round(s / 60) + ' min' : Math.floor(s / 3600) + ' h ' + Math.round((s % 3600) / 60) + ' min';
 
 function batteryState(v, running) {
   if (running) return v >= 13.5 ? ['Cargando', 'p-ok'] : ['No carga', 'p-bad'];
@@ -123,21 +180,91 @@ function batteryState(v, running) {
   if (v >= 12.1) return ['Baja', 'p-warn'];
   return ['Muy baja', 'p-bad'];
 }
+function trendText(b) {
+  if (!b || b.status === 'sin datos') return ['Sin datos aún', 'p-mute'];
+  if (b.status === 'baja') return ['Baja', 'p-bad'];
+  if (b.status === 'bajando') return ['Bajando ' + nf(Math.abs(b.slope), 2) + ' V/día', 'p-warn'];
+  return ['Estable', 'p-ok'];
+}
 
+// ---------- Mapas ----------
+const maps = {};
+function mapIn(id, host) {
+  if (!window.L || !host) return null;
+  let m = maps[id];
+  if (!m) {
+    const el = document.createElement('div');
+    el.className = 'map' + (id === 'trip' ? ' tall' : '');
+    const map = L.map(el, { zoomControl: false, attributionControl: true });
+    L.tileLayer(TILE, { attribution: ATTR, maxZoom: 19, subdomains: 'abcd' }).addTo(map);
+    m = maps[id] = { el, map, layer: L.layerGroup().addTo(map) };
+  }
+  host.replaceWith(m.el);
+  m.map.invalidateSize();
+  requestAnimationFrame(() => m.map.invalidateSize());
+  return m;
+}
+function dot(latlng, color, r = 8) {
+  return L.circleMarker(latlng, { radius: r, color: '#0f1316', weight: 3, fillColor: color, fillOpacity: 1 });
+}
+
+// ---------- Gráficas ----------
+function lineChart(points, key, { min, max, fmt, color, xKey = 'ts', label = 'Gráfica', dayTicks = true }) {
+  if (!points || points.length < 2) return '<p class="muted">Aún no hay datos suficientes.</p>';
+  const W = 340, H = 150, L0 = 34, R = 6, T = 8, B = 22;
+  const t0 = points[0][xKey], t1 = points[points.length - 1][xKey];
+  const x = t => L0 + (t - t0) / ((t1 - t0) || 1) * (W - L0 - R);
+  const y = v => T + (1 - (Math.min(max, Math.max(min, v)) - min) / (max - min)) * (H - T - B);
+  const d = points.map((p, i) => (i ? 'L' : 'M') + x(p[xKey]).toFixed(1) + ' ' + y(p[key]).toFixed(1)).join(' ');
+  const area = d + ` L${x(t1).toFixed(1)} ${H - B} L${L0} ${H - B} Z`;
+  const ticks = [min, (min + max) / 2, max].map(v =>
+    `<line x1="${L0}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L0 - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join('');
+  const xt = [];
+  if (dayTicks) {
+    for (let t = new Date(t0).setHours(24, 0, 0, 0); t < t1; t += 86400e3)
+      xt.push(`<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${new Date(t).toLocaleDateString('es-ES', { weekday: 'short' })}</text>`);
+  } else {
+    xt.push(`<text x="${L0}" y="${H - 6}">${hm(t0)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">${hm(t1)}</text>`);
+  }
+  const last = points[points.length - 1];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(label)}">
+    ${ticks}${xt.join('')}
+    <path d="${area}" fill="${color}" opacity=".14"/>
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${x(last[xKey])}" cy="${y(last[key])}" r="4" fill="${color}"/>
+  </svg>`;
+}
+
+function batteryBars(days) {
+  if (!days || !days.length) return '<p class="muted">Aún no hay datos suficientes.</p>';
+  const min = 11.8, max = 12.8, W = 340, H = 130, L0 = 34, B = 22, T = 8;
+  const bw = (W - L0) / days.length;
+  const y = v => T + (1 - (Math.min(max, Math.max(min, v)) - min) / (max - min)) * (H - T - B);
+  const grid = [11.8, 12.2, 12.6].map(v => `<line x1="${L0}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" ${v === 12.2 ? 'stroke-dasharray="4 3"' : ''}/><text x="${L0 - 6}" y="${y(v) + 4}" text-anchor="end">${nf(v, 1)}</text>`).join('');
+  const bars = days.map((d, i) => {
+    const col = d.min < 12.2 ? 'var(--bad)' : d.min < 12.4 ? 'var(--warn)' : 'var(--blue)';
+    const lab = i % 2 === days.length % 2 ? '' : `<text x="${L0 + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${+d.d.slice(8)}</text>`;
+    return `<rect x="${L0 + i * bw + bw * 0.2}" y="${y(d.min)}" width="${bw * 0.6}" height="${H - B - y(d.min)}" rx="2" fill="${col}"/>${lab}`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Voltaje mínimo diario de la batería">${grid}${bars}</svg>`;
+}
+
+// ---------- Vistas ----------
 function viewEstado(c) {
   const running = c.ignition !== 'off';
   const [bTxt, bCls] = batteryState(c.battery_v, running);
+  const [tTxt, tCls] = trendText(battery);
   const tyreNames = { fl: 'Delantera izq.', fr: 'Delantera der.', rl: 'Trasera izq.', rr: 'Trasera der.' };
   const tyres = Object.entries(c.tyres || {}).map(([k, v]) => `
     <div class="row">
       <span style="width:118px;font-size:15px">${tyreNames[k] || k}</span>
       <div class="bar" style="flex:1;height:8px"><div style="width:${Math.min(100, v / 3 * 100)}%;background:${v < 2.2 ? 'var(--warn)' : 'var(--ok)'}"></div></div>
-      <span class="big" style="font-size:20px;width:44px;text-align:right">${nf(v, 1)}</span>
+      <span class="big" style="font-size:20px;width:52px;text-align:right">${nf(v, 2)}</span>
     </div>`).join('');
-  const openings = [...(c.doors_open || []), ...(c.windows_open || [])];
-  const loc = c.location ? `<a href="https://maps.apple.com/?q=${c.location.lat},${c.location.lon}">Abrir en Mapas</a>` : '';
+  const due = maint ? maint.items.filter(i => i.status === 'vencido' || i.status === 'pronto') : [];
+  const loc = c.location;
   return `
-  ${(c.alerts || []).map(a => `<div class="pill p-warn" style="align-self:stretch;border-radius:12px;padding:10px 14px;font-size:14px">${esc(a)}</div>`).join('')}
+  ${(c.alerts || []).map(a => `<div class="alert">${esc(a)}</div>`).join('')}
   <div class="panel">
     <div class="row">
       ${running ? '<span class="pill p-live"><span class="dot"></span>En marcha</span>'
@@ -155,22 +282,83 @@ function viewEstado(c) {
   </div>
   <div class="grid2">
     <div class="panel" style="gap:6px"><div class="lbl">Odómetro</div><div class="big" style="font-size:28px">${nf(c.odometer_km)} km</div></div>
-    <div class="panel" style="gap:6px"><div class="lbl">Batería 12 V</div><div class="big" style="font-size:28px">${nf(c.battery_v, 1)} V</div><span class="pill ${bCls}">${bTxt}</span></div>
+    <div class="panel" style="gap:6px"><div class="lbl">Batería 12 V</div><div class="big" style="font-size:28px">${nf(c.battery_v, 1)} V</div>
+      <span class="pill ${bCls}">${bTxt}</span><span class="pill ${tCls}">${tTxt}</span></div>
   </div>
   <div class="panel"><div class="lbl">Neumáticos (bar)</div>${tyres}</div>
-  <div class="panel" style="gap:4px">
-    <div class="lbl">${running ? 'Posición actual' : 'Aparcado'}</div>
-    <div style="font-size:17px;font-weight:600">${openings.length ? 'Abierto: ' + esc(openings.join(', ')) : 'Puertas y ventanas cerradas'}</div>
-    <div class="muted">${loc}</div>
+  ${due.length ? `<div class="panel" style="gap:8px"><div class="lbl">Mantenimiento</div>
+    ${due.map(i => `<div class="row"><span style="font-weight:600">${esc(i.name)}</span><span class="pill ${i.status === 'vencido' ? 'p-bad' : 'p-warn'}">${esc(i.summary)}</span></div>`).join('')}
+    <button class="btn sec sm" data-go="taller">Ver taller</button></div>` : ''}
+  <div class="panel">
+    <div class="row"><div class="lbl">${running ? 'Posición actual' : 'Aparcado'}</div>
+      <span class="muted">${[...(c.doors_open || []), ...(c.windows_open || [])].length ? 'Hay algo abierto' : 'Puertas y ventanas cerradas'}</span></div>
+    ${loc ? `<div id="parkMapHost" class="map"></div>
+    <div class="btns">
+      <a class="btn sm" href="https://maps.apple.com/?daddr=${loc.lat},${loc.lon}&dirflg=w">Cómo llegar</a>
+      <a class="btn sec sm" href="https://maps.apple.com/?q=Mi%20Fiesta%20ST&ll=${loc.lat},${loc.lon}">Abrir en Mapas</a>
+    </div>` : '<p class="muted">Sin ubicación.</p>'}
   </div>`;
+}
+
+function viewViajes() {
+  if (tripDetail) return viewTrip(tripDetail);
+  if (!trips) return '<div class="panel"><p class="muted">Cargando trayectos…</p></div>';
+  if (!trips.length) return '<div class="panel"><p class="muted">Todavía no hay trayectos. Aparecerán cuando muevas el coche.</p></div>';
+  const weekAgo = Date.now() - 7 * 86400e3;
+  const wk = trips.filter(t => t.start_ts >= weekAgo);
+  const km = wk.reduce((s, t) => s + t.km, 0), secs = wk.reduce((s, t) => s + t.duration_s, 0);
+  let html = `<div class="grid2">
+    <div class="panel stat"><div class="lbl">Últimos 7 días</div><div class="big">${nf(km)} km</div><span class="muted">${wk.length} trayectos</span></div>
+    <div class="panel stat"><div class="lbl">Al volante</div><div class="big">${dur(secs)}</div><span class="muted">${secs ? nf(km / (secs / 3600)) : '—'} km/h de media</span></div>
+  </div>`;
+  let day = null, group = '';
+  const flush = () => { if (day) html += `<div class="panel" style="gap:0"><div class="lbl" style="margin-bottom:10px">${esc(day)}</div>${group}</div>`; };
+  for (const t of trips) {
+    const d = dayLabel(t.start_ts);
+    if (d !== day) { flush(); day = d; group = ''; }
+    group += `<button class="list-item" data-trip="${t.id}">
+      <div><div style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}</div>
+      <div class="muted">${dur(t.duration_s)} · ${nf(t.avg_speed)} km/h media · máx. ${nf(t.max_speed)}</div></div>
+      <div class="big" style="font-size:22px;white-space:nowrap">${nf(t.km, 1)} km</div></button>`;
+  }
+  flush();
+  return html;
+}
+
+function viewTrip(t) {
+  const l100 = t.km > 1 && t.fuel_used_l ? t.fuel_used_l / t.km * 100 : null;
+  const pts = (t.points || []).map(p => ({ ts: p[3], s: p[2] }));
+  const stat = (n, v, u = '') => `<div class="panel stat"><div class="lbl">${n}</div><div><span class="big">${v}</span> <span class="muted">${u}</span></div></div>`;
+  return `
+  <button class="btn sec sm" id="backTrips" style="align-self:flex-start">← Todos los trayectos</button>
+  <div class="panel" style="gap:6px">
+    <div class="lbl">${esc(dayLabel(t.start_ts))} · ${hm(t.start_ts)} → ${hm(t.end_ts)}</div>
+    <div style="display:flex;align-items:baseline;gap:8px"><span class="big" style="font-size:48px">${nf(t.km, 1)}</span><span class="muted" style="font-size:16px">km en ${dur(t.duration_s)}</span></div>
+  </div>
+  <div class="panel" style="padding:8px"><div id="tripMapHost" class="map tall"></div></div>
+  <div class="grid2">
+    ${stat('Vel. media', nf(t.avg_speed), 'km/h')}${stat('Vel. máxima', nf(t.max_speed), 'km/h')}
+    ${stat('Régimen máx.', nf(t.max_rpm), 'rpm')}${stat('Aceite máx.', nf(t.max_oil), '°C')}
+    ${stat('Acelerador medio', nf(t.avg_throttle), '%')}${stat('Por encima de 4.000 rpm', nf(t.rpm_high_pct), '% del tiempo')}
+  </div>
+  <div class="panel stat"><div class="lbl">Consumo estimado</div><div><span class="big">${l100 ? nf(l100, 1) : '—'}</span> <span class="muted">l/100 km · ${nf(t.fuel_used_l, 1)} L</span></div>
+    <p class="muted">Calculado con el nivel del depósito, que tiene poca precisión en trayectos cortos.</p></div>
+  <div class="panel"><div class="lbl">Velocidad (km/h)</div>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: 'var(--accent)', dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>`;
 }
 
 function viewMotor(c) {
   const running = c.ignition !== 'off';
+  const oil = c.oil_c ?? 0;
+  let warm;
+  if (!running) warm = ['Motor apagado', 'p-mute', 'Las temperaturas son las últimas leídas.'];
+  else if (oil < 60) warm = ['Frío', 'p-bad', 'Conduce suave y sin pasar de 3.000 rpm hasta que el aceite pase de 80 °C.'];
+  else if (oil < 80) warm = ['Calentando', 'p-warn', 'Casi listo. Aún sin apretar a fondo.'];
+  else warm = ['A temperatura', 'p-ok', 'El aceite ya está a temperatura de trabajo.'];
+  const oilPct = Math.min(100, oil / 120 * 100);
   const tiles = [
-    ['Aceite', nf(c.oil_c), '°C', c.oil_c > 115], ['Refrigerante', nf(c.coolant_c), '°C', c.coolant_c > 105],
-    ['Exterior', nf(c.outside_c), '°C'], ['Velocidad', running ? nf(c.speed_kmh) : '—', 'km/h'],
-    ['Marcha', running && c.gear ? c.gear : '—', running && c.gear ? 'ª' : ''], ['Régimen', running ? nf(c.rpm) : '—', 'rpm']
+    ['Refrigerante', nf(c.coolant_c), '°C', c.coolant_c > 105], ['Exterior', nf(c.outside_c), '°C'],
+    ['Velocidad', running ? nf(c.speed_kmh) : '—', 'km/h'], ['Marcha', running && c.gear ? c.gear : '—', running && c.gear ? 'ª' : ''],
+    ['Régimen', running ? nf(c.rpm) : '—', 'rpm', c.rpm > 6000], ['Batería', nf(c.battery_v, 1), 'V']
   ].map(([n, v, u, hot]) => `
     <div class="panel" style="gap:6px"><div class="lbl">${n}</div>
       <div style="display:flex;align-items:baseline;gap:6px"><span class="big" style="font-size:38px;color:${hot ? 'var(--bad)' : 'inherit'}">${v}</span><span class="muted" style="font-size:14px">${u}</span></div>
@@ -179,59 +367,83 @@ function viewMotor(c) {
     <div><div class="row muted" style="margin-bottom:6px"><span>${n}</span><span>${running ? nf(v) + ' %' : '—'}</span></div>
     <div class="bar" style="height:8px"><div style="width:${running ? v : 0}%;background:${col};transition:width .4s"></div></div></div>`;
   return `
-  <div class="panel" style="gap:4px">
-    ${running ? '<span class="pill p-live"><span class="dot"></span>En directo · cada 5 s</span>'
-      : '<div class="lbl">Motor apagado</div><p class="muted">Los datos de conducción solo llegan con el coche arrancado. Las temperaturas son las últimas leídas.</p>'}
+  <div class="panel">
+    <div class="row">
+      ${running ? '<span class="pill p-live"><span class="dot"></span>En directo</span>' : '<span class="pill p-mute">Sin conducir</span>'}
+      <span class="pill ${warm[1]}">${warm[0]}</span>
+    </div>
+    <div class="row" style="align-items:baseline"><div class="lbl">Aceite</div>
+      <div><span class="big" style="font-size:56px">${nf(c.oil_c)}</span> <span class="muted" style="font-size:18px">°C</span></div></div>
+    <div style="position:relative">
+      <div class="bar" style="height:14px;background:linear-gradient(90deg,#1d3a5a 0%,#1d3a5a 50%,#4a3a14 50%,#4a3a14 66.6%,#14402a 66.6%,#14402a 100%)">
+        <div style="width:${oilPct}%;background:${oil >= 80 ? 'var(--ok)' : oil >= 60 ? 'var(--warn)' : 'var(--blue)'}"></div></div>
+      <div class="row muted" style="margin-top:4px;font-size:11px"><span>0</span><span>60 °C</span><span>80 °C</span><span>120</span></div>
+    </div>
+    <p class="muted">${warm[2]}</p>
   </div>
   <div class="grid2">${tiles}</div>
   <div class="panel"><div class="lbl">Pedales</div>${pedal('Acelerador', c.throttle_pct, 'var(--accent)')}${pedal('Freno', c.brake_pct, 'var(--blue)')}</div>`;
 }
 
-function lineChart(points, key, { min, max, fmt, color }) {
-  if (!points || points.length < 2) return '<p class="muted">Aún no hay datos suficientes.</p>';
-  const W = 340, H = 150, L = 34, R = 6, T = 8, B = 22;
-  const t0 = points[0].ts, t1 = points[points.length - 1].ts;
-  const x = t => L + (t - t0) / ((t1 - t0) || 1) * (W - L - R);
-  const y = v => T + (1 - (v - min) / (max - min)) * (H - T - B);
-  const d = points.map((p, i) => (i ? 'L' : 'M') + x(p.ts).toFixed(1) + ' ' + y(p[key]).toFixed(1)).join(' ');
-  const area = d + ` L${x(t1).toFixed(1)} ${H - B} L${L} ${H - B} Z`;
-  const ticks = [min, (min + max) / 2, max].map(v =>
-    `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join('');
-  const days = [];
-  for (let t = new Date(t0).setHours(24, 0, 0, 0); t < t1; t += 86400e3) {
-    days.push(`<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${new Date(t).toLocaleDateString('es-ES', { weekday: 'short' })}</text>`);
-  }
-  const last = points[points.length - 1];
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Gráfica">
-    ${ticks}${days.join('')}
-    <path d="${area}" fill="${color}" opacity=".14"/>
-    <path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>
-    <circle cx="${x(last.ts)}" cy="${y(last[key])}" r="4" fill="${color}"/>
-  </svg>`;
-}
-
-function viewHistorial() {
-  if (!hist || !refuels) return '<div class="panel"><p class="muted">Cargando histórico…</p></div>';
+function viewDatos() {
+  if (!hist || !refuels) return '<div class="panel"><p class="muted">Cargando datos…</p></div>';
   const pts = hist.points;
   const km7 = pts.length > 1 ? pts[pts.length - 1].odometer - pts[0].odometer : 0;
-  const rows = refuels.refuels.slice(0, 8).map(r => `
-    <div class="row">
-      <div><div style="font-size:15px;font-weight:600">${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</div>
-      <div class="muted">${nf(r.odometer)} km${r.km ? ' · ' + nf(r.km) + ' km recorridos' : ''}</div></div>
+  const priced = refuels.refuels.filter(r => r.price_total);
+  const now = new Date();
+  const month = priced.filter(r => { const d = new Date(r.ts); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+  const monthSpend = month.reduce((s, r) => s + r.price_total, 0);
+  const avgPriceL = priced.length ? priced.reduce((s, r) => s + r.price_total, 0) / priced.reduce((s, r) => s + r.litres, 0) : null;
+  const eurKm = avgPriceL && refuels.avg_l100 ? avgPriceL * refuels.avg_l100 / 100 : null;
+  const [tTxt, tCls] = trendText(battery);
+  const rows = refuels.refuels.slice(0, 10).map(r => `
+    <button class="list-item" data-refuel="${r.ts}">
+      <div><div style="font-size:15px;font-weight:600">${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}${r.station ? ' · ' + esc(r.station) : ''}</div>
+      <div class="muted">${nf(r.odometer)} km · ${r.l100 ? nf(r.l100, 1) + ' l/100 km' : 'sin consumo aún'}</div></div>
       <div style="text-align:right"><div class="big" style="font-size:20px">${nf(r.litres, 1)} L</div>
-      <div class="muted">${r.l100 ? nf(r.l100, 1) + ' l/100 km' : '—'}</div></div>
-    </div>`).join('') || '<p class="muted">Todavía no se ha detectado ningún repostaje.</p>';
+      <div class="muted">${r.price_total ? nf(r.price_total, 2) + ' € · ' + nf(r.price_l, 3) + ' €/L' : '<span style="color:var(--accent)">Añadir precio</span>'}</div></div>
+    </button>`).join('') || '<p class="muted">Todavía no se ha detectado ningún repostaje.</p>';
   return `
   <div class="grid2">
-    <div class="panel" style="gap:6px"><div class="lbl">Últimos 7 días</div><div class="big" style="font-size:28px">${nf(km7)} km</div></div>
-    <div class="panel" style="gap:6px"><div class="lbl">Consumo medio</div><div class="big" style="font-size:28px">${refuels.avg_l100 ? nf(refuels.avg_l100, 1) : '—'}</div><span class="muted">l/100 km</span></div>
+    <div class="panel stat"><div class="lbl">Últimos 7 días</div><div class="big">${nf(km7)} km</div></div>
+    <div class="panel stat"><div class="lbl">Consumo medio</div><div class="big">${nf(refuels.avg_l100, 1)}</div><span class="muted">l/100 km</span></div>
+    <div class="panel stat"><div class="lbl">Gasto este mes</div><div class="big">${month.length ? nf(monthSpend, 2) + ' €' : '—'}</div><span class="muted">${month.length} repostajes con precio</span></div>
+    <div class="panel stat"><div class="lbl">Coste por km</div><div class="big">${eurKm ? nf(eurKm * 100, 1) : '—'}</div><span class="muted">céntimos/km</span></div>
   </div>
-  <div class="panel"><div class="lbl">Combustible (%)</div>${lineChart(pts, 'fuel_pct', { min: 0, max: 100, fmt: v => nf(v), color: 'var(--accent)' })}</div>
-  <div class="panel"><div class="lbl">Batería 12 V</div>${lineChart(pts, 'battery_v', { min: 11.5, max: 14.5, fmt: v => nf(v, 1), color: 'var(--blue)' })}</div>
-  <div class="panel"><div class="lbl">Repostajes detectados</div>${rows}</div>`;
+  <div class="panel"><div class="lbl">Combustible (%)</div>${lineChart(pts, 'fuel_pct', { min: 0, max: 100, fmt: v => nf(v), color: 'var(--accent)', label: 'Nivel de combustible' })}</div>
+  <div class="panel">
+    <div class="row"><div class="lbl">Batería 12 V · mínimo diario aparcado</div><span class="pill ${tCls}">${tTxt}</span></div>
+    ${batteryBars(battery && battery.days)}
+    <p class="muted">Por debajo de 12,2 V (línea discontinua) la batería empieza a sufrir. Si baja día a día con el coche parado, revísala antes de que te deje tirado.</p>
+  </div>
+  <div class="panel" style="gap:0">
+    <div class="row" style="margin-bottom:12px"><div class="lbl">Repostajes</div><button class="btn sec sm" id="copyCsv" style="min-height:36px">Copiar CSV</button></div>
+    ${rows}
+  </div>`;
+}
+
+function viewTaller() {
+  if (!maint) return '<div class="panel"><p class="muted">Cargando mantenimiento…</p></div>';
+  const cls = { vencido: 'p-bad', pronto: 'p-warn', ok: 'p-ok', 'sin datos': 'p-mute' };
+  const col = { vencido: 'var(--bad)', pronto: 'var(--warn)', ok: 'var(--ok)', 'sin datos': 'var(--line)' };
+  const items = maint.items.map(i => `
+    <div class="panel" style="gap:10px">
+      <div class="row"><span style="font-size:17px;font-weight:600">${esc(i.name)}</span><span class="pill ${cls[i.status]}">${i.status === 'sin datos' ? 'Sin configurar' : i.status === 'ok' ? 'Al día' : i.status === 'pronto' ? 'Pronto' : 'Vencido'}</span></div>
+      <div class="bar" style="height:8px"><div style="width:${Math.round(i.pct * 100)}%;background:${col[i.status]}"></div></div>
+      <p class="muted">${esc(i.summary)}${i.interval_km ? ' · cada ' + nf(i.interval_km) + ' km' : ''}${i.interval_months ? ' · cada ' + i.interval_months + ' meses' : ''}</p>
+      ${i.last_km != null || i.last_date ? `<p class="muted">Último: ${i.last_km != null ? nf(i.last_km) + ' km' : ''}${i.last_km != null && i.last_date ? ' · ' : ''}${i.last_date ? new Date(i.last_date).toLocaleDateString('es-ES') : ''}</p>` : ''}
+      ${i.notes ? `<p class="muted">${esc(i.notes)}</p>` : ''}
+      <div class="btns"><button class="btn sm" data-done="${i.id}">Hecho hoy</button><button class="btn sec sm" data-edit="${i.id}">Editar</button></div>
+    </div>`).join('');
+  return `
+  <div class="panel stat"><div class="lbl">Kilómetros actuales</div><div class="big">${nf(maint.odometer)} km</div>
+    <p class="muted">Los intervalos son de ejemplo: ajústalos a tu coche. Te aviso a las 9:00 cuando falten 1.000 km o 30 días.</p></div>
+  ${items}
+  <button class="btn sec" data-edit="new">Añadir tarea</button>`;
 }
 
 function viewAjustes() {
+  const pushOn = typeof Notification !== 'undefined' && Notification.permission === 'granted';
   return `
   <form class="panel" id="cfgForm">
     <div class="lbl">Conexión con tu servidor</div>
@@ -242,50 +454,237 @@ function viewAjustes() {
       <input id="fKey" type="password" autocomplete="current-password" value="${esc(cfg.key || '')}" required>
     </label>
     <button class="btn" type="submit">Guardar y conectar</button>
-    ${cfg.url ? '<button class="btn sec" type="button" id="cancelCfg">Volver</button>' : ''}
   </form>
-  <p class="muted">Se guarda solo en este móvil.</p>`;
+  ${cfg.url ? `<div class="panel">
+    <div class="lbl">Avisos en el móvil</div>
+    ${standalone
+      ? `<p class="muted">Repostajes, presión de neumáticos, batería, coche abierto, poco combustible, motor a temperatura y mantenimiento.</p>
+         <div class="btns"><button class="btn" id="pushOn">${pushOn ? 'Volver a activar' : 'Activar avisos'}</button><button class="btn sec" id="pushTest">Enviar prueba</button></div>`
+      : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
+  </div>
+  <button class="btn sec" id="cancelCfg">Volver</button>` : ''}
+  <p class="muted">La conexión se guarda solo en este móvil.</p>`;
+}
+
+function sheetHtml() {
+  if (!sheet) return '';
+  if (sheet.type === 'refuel') {
+    const r = sheet.item;
+    return `<form class="sheet" id="sheetForm">
+      <div class="lbl">Repostaje del ${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</div>
+      <div class="big" style="font-size:32px">${nf(r.litres, 1)} L <span class="muted" style="font-size:15px">estimados por el nivel del depósito</span></div>
+      <label for="sPrice">Precio total (€)<input id="sPrice" inputmode="decimal" value="${r.price_total != null ? nf(r.price_total, 2) : ''}" placeholder="52,30"></label>
+      <label for="sStation">Gasolinera (opcional)<input id="sStation" value="${esc(r.station || '')}" placeholder="Repsol Salou"></label>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+    </form>`;
+  }
+  const i = sheet.item || {};
+  return `<form class="sheet" id="sheetForm">
+    <div class="lbl">${i.id ? 'Editar tarea' : 'Nueva tarea'}</div>
+    <label for="mName">Nombre<input id="mName" value="${esc(i.name || '')}" placeholder="Aceite y filtro" required></label>
+    <div class="grid2">
+      <label for="mKm">Cada (km)<input id="mKm" inputmode="numeric" value="${i.interval_km ?? ''}" placeholder="15000"></label>
+      <label for="mMo">Cada (meses)<input id="mMo" inputmode="numeric" value="${i.interval_months ?? ''}" placeholder="12"></label>
+      <label for="mLastKm">Último (km)<input id="mLastKm" inputmode="numeric" value="${i.last_km != null ? Math.round(i.last_km) : ''}" placeholder="${maint && maint.odometer ? Math.round(maint.odometer) : ''}"></label>
+      <label for="mLastDate">Última fecha<input id="mLastDate" type="date" value="${i.last_date || ''}"></label>
+    </div>
+    <label for="mNotes">Notas (opcional)<input id="mNotes" value="${esc(i.notes || '')}" placeholder="Aceite 5W-30 Ford WSS-M2C913-D"></label>
+    <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+    ${i.id ? '<button class="btn danger" type="button" id="mDelete">Borrar tarea</button>' : ''}
+  </form>`;
+}
+
+// ---------- Render ----------
+function renderBadge() {
+  const src = live && live.source === 'mock' ? '<span class="pill p-warn">Datos de prueba</span>' : '';
+  $('#badge').innerHTML = tab === 'ajustes' ? '' : src;
 }
 
 function render() {
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   $('#nav').style.display = tab === 'ajustes' ? 'none' : 'flex';
-  const src = live && live.source === 'mock' ? '<span class="pill p-warn">Datos de prueba</span>' : '';
-  $('#badge').innerHTML = tab === 'ajustes' ? '' : src;
-  let html = error && tab !== 'ajustes' ? `<div class="err">${esc(error)}</div>` : '';
-  if (tab === 'ajustes') html += viewAjustes();
-  else if (!live) html += error ? '' : '<div class="panel"><p class="muted">Conectando con el coche…</p></div>';
-  else if (tab === 'estado') html += viewEstado(live);
-  else if (tab === 'motor') html += viewMotor(live);
-  else html += viewHistorial();
+  renderBadge();
+  let html = '';
+  if (notice) html += `<div class="okmsg">${esc(notice)}</div>`;
+  if (error && tab !== 'ajustes') html += `<div class="err">${esc(error)}</div>`;
+  if (tab === 'ajustes') { if (error) html += `<div class="err">${esc(error)}</div>`; html += viewAjustes(); }
+  else if (tab === 'estado') html += live ? viewEstado(live) : error ? '' : '<div class="panel"><p class="muted">Conectando con el coche…</p></div>';
+  else if (tab === 'motor') html += live ? viewMotor(live) : error ? '' : '<div class="panel"><p class="muted">Conectando con el coche…</p></div>';
+  else if (tab === 'viajes') html += viewViajes();
+  else if (tab === 'datos') html += viewDatos();
+  else if (tab === 'taller') html += viewTaller();
   $('#main').innerHTML = html;
+  $('#sheetHost').innerHTML = sheet ? `<div class="sheet-bg" id="sheetBg">${sheetHtml()}</div>` : '';
+  afterRender();
+}
 
-  const form = $('#cfgForm');
-  if (form) {
-    form.onsubmit = e => {
-      e.preventDefault();
-      cfg = { url: $('#fUrl').value.trim(), key: $('#fKey').value };
-      try { localStorage.setItem('fst_cfg', JSON.stringify(cfg)); } catch (err) {}
-      tab = 'estado'; live = null; hist = null; histLoaded = 0; error = null;
-      render(); loadLive();
-    };
-    const back = $('#cancelCfg');
-    if (back) back.onclick = () => { tab = 'estado'; render(); schedule(); };
+function afterRender() {
+  // Mapas
+  const ph = $('#parkMapHost');
+  if (ph && live && live.location) {
+    const m = mapIn('park', ph);
+    if (m) {
+      const ll = [live.location.lat, live.location.lon];
+      m.layer.clearLayers(); dot(ll, '#ff7a1a', 9).addTo(m.layer);
+      m.map.setView(ll, 16);
+    }
   }
+  const th = $('#tripMapHost');
+  if (th && tripDetail) {
+    const m = mapIn('trip', th);
+    if (m) {
+      m.layer.clearLayers();
+      const ll = tripDetail.points.map(p => [p[0], p[1]]);
+      if (ll.length > 1) {
+        L.polyline(ll, { color: '#ff7a1a', weight: 4, opacity: .95 }).addTo(m.layer);
+        dot(ll[0], '#3ecf8e', 7).addTo(m.layer);
+        dot(ll[ll.length - 1], '#ff5a5a', 7).addTo(m.layer);
+        m.map.fitBounds(L.latLngBounds(ll), { padding: [24, 24] });
+      } else if (ll.length) m.map.setView(ll[0], 15);
+    }
+  }
+  // Acciones
+  document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+  document.querySelectorAll('[data-trip]').forEach(b => b.onclick = async () => {
+    try { tripDetail = await api('/api/trips/' + b.dataset.trip); error = null; } catch (e) { error = e.message; }
+    render(); $('#main').scrollTop = 0;
+  });
+  const back = $('#backTrips'); if (back) back.onclick = () => { tripDetail = null; render(); };
+  document.querySelectorAll('[data-refuel]').forEach(b => b.onclick = () => {
+    sheet = { type: 'refuel', item: refuels.refuels.find(r => String(r.ts) === b.dataset.refuel) }; render();
+  });
+  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+    sheet = { type: 'maint', item: b.dataset.edit === 'new' ? null : maint.items.find(i => String(i.id) === b.dataset.edit) }; render();
+  });
+  document.querySelectorAll('[data-done]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { maint = await api(`/api/maintenance/${b.dataset.done}/done`, { method: 'POST' }); loaded.maint = Date.now(); flash('Apuntado con los km de hoy'); }
+    catch (e) { error = e.message; render(); }
+  });
+  const csv = $('#copyCsv'); if (csv) csv.onclick = copyCsv;
+  bindSettings();
+  bindSheet();
+}
+
+function bindSettings() {
+  const form = $('#cfgForm');
+  if (form) form.onsubmit = e => {
+    e.preventDefault();
+    cfg = { url: $('#fUrl').value.trim(), key: $('#fKey').value };
+    try { localStorage.setItem('fst_cfg', JSON.stringify(cfg)); } catch (err) {}
+    live = hist = battery = refuels = trips = maint = tripDetail = null; loaded = {}; error = null;
+    go('estado'); loadLive();
+  };
+  const cancel = $('#cancelCfg'); if (cancel) cancel.onclick = () => go('estado');
+  const on = $('#pushOn'); if (on) on.onclick = async () => {
+    on.disabled = true;
+    try { await enablePush(); flash('Avisos activados en este móvil'); } catch (e) { error = e.message; render(); }
+  };
+  const test = $('#pushTest'); if (test) test.onclick = async () => {
+    test.disabled = true;
+    try {
+      const r = await api('/api/push/test', { method: 'POST' });
+      if (!r.devices) throw new Error('Todavía no hay ningún móvil con los avisos activados.');
+      flash(r.sent ? 'Aviso de prueba enviado' : 'No se pudo enviar el aviso. Prueba a activarlos de nuevo.');
+    } catch (e) { error = e.message; render(); }
+  };
+}
+
+function bindSheet() {
+  const bg = $('#sheetBg'); if (!bg) return;
+  bg.onclick = e => { if (e.target === bg) closeSheet(); };
+  bg.querySelectorAll('[data-close]').forEach(b => b.onclick = closeSheet);
+  const form = $('#sheetForm');
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    try {
+      if (sheet.type === 'refuel') {
+        const price = $('#sPrice').value.trim();
+        await api('/api/refuels/' + sheet.item.ts, { method: 'POST', body: JSON.stringify({ price_total: price ? num(price) : null, station: $('#sStation').value.trim() }) });
+        refuels = await api('/api/refuels'); loaded.datos = Date.now();
+        sheet = null; flash('Repostaje guardado');
+      } else {
+        const body = {
+          id: sheet.item && sheet.item.id, name: $('#mName').value,
+          interval_km: num($('#mKm').value), interval_months: num($('#mMo').value),
+          last_km: num($('#mLastKm').value), last_date: $('#mLastDate').value, notes: $('#mNotes').value
+        };
+        maint = await api('/api/maintenance', { method: 'POST', body: JSON.stringify(body) }); loaded.maint = Date.now();
+        sheet = null; flash('Tarea guardada');
+      }
+    } catch (err) {
+      btn.disabled = false;
+      let m = form.querySelector('.err');
+      if (!m) { m = document.createElement('div'); m.className = 'err'; form.prepend(m); }
+      m.textContent = err.message;
+    }
+  };
+  const del = $('#mDelete'); if (del) del.onclick = async () => {
+    if (del.dataset.confirm !== '1') { del.dataset.confirm = '1'; del.textContent = 'Toca otra vez para borrar'; return; }
+    try { maint = await api('/api/maintenance/' + sheet.item.id, { method: 'DELETE' }); sheet = null; flash('Tarea borrada'); }
+    catch (e) { error = e.message; sheet = null; render(); }
+  };
+}
+
+function closeSheet() { sheet = null; render(); }
+function flash(msg) { notice = msg; error = null; render(); setTimeout(() => { if (notice === msg) { notice = null; if (!sheet) render(); } }, 2500); }
+
+async function copyCsv() {
+  const lines = [['fecha', 'km', 'litros', 'precio_total_eur', 'eur_litro', 'consumo_l100km', 'gasolinera'].join(';')];
+  for (const r of refuels.refuels.slice().reverse()) {
+    lines.push([new Date(r.ts).toISOString().slice(0, 10), Math.round(r.odometer), nf(r.litres, 1), r.price_total != null ? nf(r.price_total, 2) : '',
+      r.price_l != null ? nf(r.price_l, 3) : '', r.l100 != null ? nf(r.l100, 1) : '', r.station || ''].join(';'));
+  }
+  try { await navigator.clipboard.writeText(lines.join('\n')); flash('CSV copiado: pégalo en tu Cuaderno o en una hoja de cálculo'); }
+  catch (e) { error = 'No se pudo copiar al portapapeles.'; render(); }
+}
+
+// ---------- Avisos push ----------
+function b64ToU8(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '=';
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+async function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined')
+    throw new Error('Este navegador no admite avisos. En iPhone, abre la app desde el icono de la pantalla de inicio.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('No has dado permiso para los avisos. Puedes activarlo en Ajustes del iPhone → Notificaciones → Fiesta ST.');
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await api('/api/push/key');
+  let sub = await reg.pushManager.getSubscription();
+  if (sub) {
+    const cur = sub.options && sub.options.applicationServerKey;
+    if (cur && btoa(String.fromCharCode(...new Uint8Array(cur))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') !== key) { await sub.unsubscribe(); sub = null; }
+  }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+  await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+}
+
+// ---------- Navegación ----------
+function go(t) {
+  tab = t; sheet = null;
+  if (t !== 'viajes') tripDetail = null;
+  if (TABS.includes(t) && location.hash !== '#' + t) history.replaceState(null, '', '#' + t);
+  render();
+  if (t === 'ajustes') clearTimeout(timer);
+  else { loadFor(t); schedule(); }
 }
 
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
-  tab = b.dataset.tab; render();
-  if (tab === 'historial') loadHistory();
+  if (b.dataset.tab === 'viajes' && tab === 'viajes') tripDetail = null;
+  go(b.dataset.tab);
 });
-$('#cfgBtn').onclick = () => { clearTimeout(timer); tab = 'ajustes'; render(); };
+$('#cfgBtn').onclick = () => go('ajustes');
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (TABS.includes(h) && h !== tab) go(h); });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && cfg.url && tab !== 'ajustes') { loadLive(); if (tab === 'historial') loadHistory(true); }
+  if (!document.hidden && cfg.url && tab !== 'ajustes') { loadLive(); loadFor(tab, true); }
   else clearTimeout(timer);
 });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 
 render();
-if (cfg.url && cfg.key) loadLive();
+if (cfg.url && cfg.key) { loadLive(); loadFor(tab); }
 </script>
 </body>
 </html>
