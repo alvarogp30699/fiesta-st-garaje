@@ -62,6 +62,19 @@ function ago(ts) {
 
 const w = new ListWidget();
 w.backgroundColor = BG;
+
+// Fondo: foto del coche oscurecida para que se lea el texto (se guarda en el iPhone por si no hay conexión)
+async function background(file) {
+  const fm = FileManager.local(), path = fm.joinPath(fm.documentsDirectory(), 'fiesta-' + file);
+  let img = null;
+  try { img = await new Request('https://alvarogp30699.github.io/fiesta-st-garaje/herramientas/' + file).loadImage(); fm.writeImage(path, img); }
+  catch (e) { if (fm.fileExists(path)) img = fm.readImage(path); }
+  if (!img) return null;
+  const c = new DrawContext(); c.size = img.size; c.opaque = true;
+  c.drawImageInRect(img, new Rect(0, 0, img.size.width, img.size.height));
+  c.setFillColor(new Color('#000000', 0.58)); c.fillRect(new Rect(0, 0, img.size.width, img.size.height));
+  return c.getImage();
+}
 w.url = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
 w.refreshAfterDate = new Date(Date.now() + 15 * 60e3);
 
@@ -87,8 +100,11 @@ if (!d) {
   w.addSpacer();
   txt(w, ago(d.data_ts), 10, MU, 'regular');
 } else {
-  // ---------- Mediano ----------
+  // ---------- Mediano y grande ----------
   w.setPadding(12, 14, 12, 14);
+  const bgImg = await background(fam === 'large' ? 'widget-fondo-grande.jpg' : 'widget-fondo.jpg');
+  if (bgImg) w.backgroundImage = bgImg;
+  if (fam === 'large') w.addSpacer();
   const running = d.ignition && d.ignition !== 'off';
 
   // Cabecera
@@ -122,7 +138,7 @@ if (!d) {
   for (const [a, b] of [['fl', 'fr'], ['rl', 'rr']]) {
     const row = c2.addStack(); row.spacing = 6;
     for (const k of [a, b]) {
-      const cell = row.addStack(); cell.backgroundColor = PN; cell.cornerRadius = 6; cell.setPadding(3, 5, 3, 5);
+      const cell = row.addStack(); cell.backgroundColor = new Color('#000000', 0.45); cell.cornerRadius = 6; cell.setPadding(3, 5, 3, 5);
       txt(cell, f2(t[k]), 12, low.includes(k) ? WA : OK, 'bold', true);
     }
     c2.addSpacer(4);
@@ -151,5 +167,5 @@ if (!d) {
 }
 
 if (config.runsInWidget) Script.setWidget(w);
-else if (fam === 'small') await w.presentSmall(); else await w.presentMedium();
+else if (fam === 'small') await w.presentSmall(); else if (fam === 'large') await w.presentLarge(); else await w.presentMedium();
 Script.complete();
