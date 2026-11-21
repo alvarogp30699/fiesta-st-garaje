@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fiesta ST">
+<meta name="theme-color" content="#0f1316">
+<title>Fiesta ST Garaje</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#0f1316; --panel:#181e23; --line:#26303a; --text:#eef2f5; --muted:#9aa7b2;
+  --accent:#ff7a1a; --ok:#3ecf8e; --warn:#ffb020; --bad:#ff5a5a; --blue:#4aa3ff;
+  --display:'Barlow Condensed',system-ui,sans-serif; --body:'Barlow',system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--body);-webkit-text-size-adjust:100%}
+body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+header{padding:16px 20px 10px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+main{flex:1;min-height:0;overflow-y:auto;padding:4px 16px 20px;display:flex;flex-direction:column;gap:12px;-webkit-overflow-scrolling:touch}
+nav{display:flex;gap:6px;border-top:1px solid var(--line);background:#12171b;padding:6px 8px calc(8px + env(safe-area-inset-bottom))}
+nav button{flex:1;min-height:48px;border:0;border-radius:10px;font:600 15px var(--body);background:transparent;color:var(--muted)}
+nav button.on{background:var(--accent);color:#1a0d02}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.lbl{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.big{font-family:var(--display);font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.muted{color:var(--muted);font-size:13px;margin:0}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;align-self:flex-start}
+.p-ok{background:#12301f;color:var(--ok)} .p-warn{background:#2a2113;color:var(--warn)} .p-bad{background:#331616;color:var(--bad)} .p-live{background:#33190a;color:var(--accent)}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 1.4s infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.dot{animation:none}}
+.bar{height:10px;border-radius:6px;background:var(--line);overflow:hidden}
+.bar>div{height:100%;border-radius:6px}
+.icon-btn{width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--text);display:grid;place-items:center}
+a{color:var(--accent)}
+label{display:flex;flex-direction:column;gap:6px;font-size:14px;color:var(--muted)}
+input{font:16px var(--body);padding:12px;border-radius:10px;border:1px solid var(--line);background:#0f1316;color:var(--text)}
+.btn{min-height:48px;border:0;border-radius:10px;font:600 16px var(--body);background:var(--accent);color:#1a0d02}
+.btn.sec{background:transparent;color:var(--text);border:1px solid var(--line)}
+.err{background:#331616;color:#ffb3b3;border-radius:12px;padding:12px 14px;font-size:14px}
+svg text{fill:var(--muted);font:11px var(--body)}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="lbl">Ford Fiesta ST Mk8</div>
+    <div class="big" style="font-size:34px">Mi Fiesta ST</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="badge"></span>
+    <button class="icon-btn" id="cfgBtn" aria-label="Ajustes">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+</header>
+<main id="main"></main>
+<nav id="nav">
+  <button data-tab="estado">Estado</button>
+  <button data-tab="motor">Motor</button>
+  <button data-tab="historial">Histórico</button>
+</nav>
+
+<script>
+const $ = s => document.querySelector(s);
+const nf = (v, d = 0) => v == null ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+let cfg = {};
+try { cfg = JSON.parse(localStorage.getItem('fst_cfg') || '{}'); } catch (e) {}
+let tab = cfg.url && cfg.key ? 'estado' : 'ajustes';
+let live = null, hist = null, refuels = null, error = null, timer = null, histLoaded = 0;
+
+async function api(path) {
+  const r = await fetch(cfg.url.replace(/\/+$/, '') + path, { headers: { 'x-app-key': cfg.key } });
+  const j = await r.json().catch(() => ({ error: 'El servidor no ha devuelto datos válidos' }));
+  if (!r.ok) throw new Error(j.error || 'Error ' + r.status);
+  return j;
+}
+
+async function loadLive() {
+  try { live = await api('/api/live'); error = null; }
+  catch (e) { error = e.message === 'Failed to fetch' ? 'No se puede conectar con el servidor. Revisa la URL en Ajustes.' : e.message; }
+  render();
+  schedule();
+}
+
+async function loadHistory(force) {
+  if (!force && Date.now() - histLoaded < 120e3) return;
+  try {
+    [hist, refuels] = await Promise.all([api('/api/history?days=7'), api('/api/refuels')]);
+    histLoaded = Date.now(); error = null;
+  } catch (e) { error = e.message; }
+  render();
+}
+
+function schedule() {
+  clearTimeout(timer);
+  if (document.hidden || tab === 'ajustes' || !cfg.url) return;
+  const running = live && live.ignition !== 'off';
+  timer = setTimeout(loadLive, running ? 5000 : 60000);
+}
+
+function ago(ts) {
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return 'hace ' + Math.max(s, 0) + ' s';
+  if (s < 3600) return 'hace ' + Math.round(s / 60) + ' min';
+  if (s < 86400) return 'hace ' + Math.round(s / 3600) + ' h';
+  return 'hace ' + Math.round(s / 86400) + ' d';
+}
+
+function batteryState(v, running) {
+  if (running) return v >= 13.5 ? ['Cargando', 'p-ok'] : ['No carga', 'p-bad'];
+  if (v >= 12.4) return ['Correcta', 'p-ok'];
+  if (v >= 12.1) return ['Baja', 'p-warn'];
+  return ['Muy baja', 'p-bad'];
+}
+
+function viewEstado(c) {
+  const running = c.ignition !== 'off';
+  const [bTxt, bCls] = batteryState(c.battery_v, running);
+  const tyreNames = { fl: 'Delantera izq.', fr: 'Delantera der.', rl: 'Trasera izq.', rr: 'Trasera der.' };
+  const tyres = Object.entries(c.tyres || {}).map(([k, v]) => `
+    <div class="row">
+      <span style="width:118px;font-size:15px">${tyreNames[k] || k}</span>
+      <div class="bar" style="flex:1;height:8px"><div style="width:${Math.min(100, v / 3 * 100)}%;background:${v < 2.2 ? 'var(--warn)' : 'var(--ok)'}"></div></div>
+      <span class="big" style="font-size:20px;width:44px;text-align:right">${nf(v, 1)}</span>
+    </div>`).join('');
+  const openings = [...(c.doors_open || []), ...(c.windows_open || [])];
+  const loc = c.location ? `<a href="https://maps.apple.com/?q=${c.location.lat},${c.location.lon}">Abrir en Mapas</a>` : '';
+  return `
+  ${(c.alerts || []).map(a => `<div class="pill p-warn" style="align-self:stretch;border-radius:12px;padding:10px 14px;font-size:14px">${esc(a)}</div>`).join('')}
+  <div class="panel">
+    <div class="row">
+      ${running ? '<span class="pill p-live"><span class="dot"></span>En marcha</span>'
+        : c.locked ? '<span class="pill p-ok">Cerrado</span>' : '<span class="pill p-bad">Abierto</span>'}
+      <span class="muted">Actualizado ${ago(c.ts)}</span>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:8px">
+      <span class="big" style="font-size:64px">${nf(c.range_km)}</span>
+      <span style="font-size:18px;color:var(--muted)">km de autonomía</span>
+    </div>
+    <div>
+      <div class="row muted" style="margin-bottom:6px"><span>Combustible</span><span>${nf(c.fuel_pct)} %</span></div>
+      <div class="bar"><div style="width:${c.fuel_pct}%;background:${c.fuel_pct < 15 ? 'var(--bad)' : 'var(--accent)'}"></div></div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="panel" style="gap:6px"><div class="lbl">Odómetro</div><div class="big" style="font-size:28px">${nf(c.odometer_km)} km</div></div>
+    <div class="panel" style="gap:6px"><div class="lbl">Batería 12 V</div><div class="big" style="font-size:28px">${nf(c.battery_v, 1)} V</div><span class="pill ${bCls}">${bTxt}</span></div>
+  </div>
+  <div class="panel"><div class="lbl">Neumáticos (bar)</div>${tyres}</div>
+  <div class="panel" style="gap:4px">
+    <div class="lbl">${running ? 'Posición actual' : 'Aparcado'}</div>
+    <div style="font-size:17px;font-weight:600">${openings.length ? 'Abierto: ' + esc(openings.join(', ')) : 'Puertas y ventanas cerradas'}</div>
+    <div class="muted">${loc}</div>
+  </div>`;
+}
+
+function viewMotor(c) {
+  const running = c.ignition !== 'off';
+  const tiles = [
+    ['Aceite', nf(c.oil_c), '°C', c.oil_c > 115], ['Refrigerante', nf(c.coolant_c), '°C', c.coolant_c > 105],
+    ['Exterior', nf(c.outside_c), '°C'], ['Velocidad', running ? nf(c.speed_kmh) : '—', 'km/h'],
+    ['Marcha', running && c.gear ? c.gear : '—', running && c.gear ? 'ª' : ''], ['Régimen', running ? nf(c.rpm) : '—', 'rpm']
+  ].map(([n, v, u, hot]) => `
+    <div class="panel" style="gap:6px"><div class="lbl">${n}</div>
+      <div style="display:flex;align-items:baseline;gap:6px"><span class="big" style="font-size:38px;color:${hot ? 'var(--bad)' : 'inherit'}">${v}</span><span class="muted" style="font-size:14px">${u}</span></div>
+    </div>`).join('');
+  const pedal = (n, v, col) => `
+    <div><div class="row muted" style="margin-bottom:6px"><span>${n}</span><span>${running ? nf(v) + ' %' : '—'}</span></div>
+    <div class="bar" style="height:8px"><div style="width:${running ? v : 0}%;background:${col};transition:width .4s"></div></div></div>`;
+  return `
+  <div class="panel" style="gap:4px">
+    ${running ? '<span class="pill p-live"><span class="dot"></span>En directo · cada 5 s</span>'
+      : '<div class="lbl">Motor apagado</div><p class="muted">Los datos de conducción solo llegan con el coche arrancado. Las temperaturas son las últimas leídas.</p>'}
+  </div>
+  <div class="grid2">${tiles}</div>
+  <div class="panel"><div class="lbl">Pedales</div>${pedal('Acelerador', c.throttle_pct, 'var(--accent)')}${pedal('Freno', c.brake_pct, 'var(--blue)')}</div>`;
+}
+
+function lineChart(points, key, { min, max, fmt, color }) {
+  if (!points || points.length < 2) return '<p class="muted">Aún no hay datos suficientes.</p>';
+  const W = 340, H = 150, L = 34, R = 6, T = 8, B = 22;
+  const t0 = points[0].ts, t1 = points[points.length - 1].ts;
+  const x = t => L + (t - t0) / ((t1 - t0) || 1) * (W - L - R);
+  const y = v => T + (1 - (v - min) / (max - min)) * (H - T - B);
+  const d = points.map((p, i) => (i ? 'L' : 'M') + x(p.ts).toFixed(1) + ' ' + y(p[key]).toFixed(1)).join(' ');
+  const area = d + ` L${x(t1).toFixed(1)} ${H - B} L${L} ${H - B} Z`;
+  const ticks = [min, (min + max) / 2, max].map(v =>
+    `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join('');
+  const days = [];
+  for (let t = new Date(t0).setHours(24, 0, 0, 0); t < t1; t += 86400e3) {
+    days.push(`<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${new Date(t).toLocaleDateString('es-ES', { weekday: 'short' })}</text>`);
+  }
+  const last = points[points.length - 1];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Gráfica">
+    ${ticks}${days.join('')}
+    <path d="${area}" fill="${color}" opacity=".14"/>
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${x(last.ts)}" cy="${y(last[key])}" r="4" fill="${color}"/>
+  </svg>`;
+}
+
+function viewHistorial() {
+  if (!hist || !refuels) return '<div class="panel"><p class="muted">Cargando histórico…</p></div>';
+  const pts = hist.points;
+  const km7 = pts.length > 1 ? pts[pts.length - 1].odometer - pts[0].odometer : 0;
+  const rows = refuels.refuels.slice(0, 8).map(r => `
+    <div class="row">
+      <div><div style="font-size:15px;font-weight:600">${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</div>
+      <div class="muted">${nf(r.odometer)} km${r.km ? ' · ' + nf(r.km) + ' km recorridos' : ''}</div></div>
+      <div style="text-align:right"><div class="big" style="font-size:20px">${nf(r.litres, 1)} L</div>
+      <div class="muted">${r.l100 ? nf(r.l100, 1) + ' l/100 km' : '—'}</div></div>
+    </div>`).join('') || '<p class="muted">Todavía no se ha detectado ningún repostaje.</p>';
+  return `
+  <div class="grid2">
+    <div class="panel" style="gap:6px"><div class="lbl">Últimos 7 días</div><div class="big" style="font-size:28px">${nf(km7)} km</div></div>
+    <div class="panel" style="gap:6px"><div class="lbl">Consumo medio</div><div class="big" style="font-size:28px">${refuels.avg_l100 ? nf(refuels.avg_l100, 1) : '—'}</div><span class="muted">l/100 km</span></div>
+  </div>
+  <div class="panel"><div class="lbl">Combustible (%)</div>${lineChart(pts, 'fuel_pct', { min: 0, max: 100, fmt: v => nf(v), color: 'var(--accent)' })}</div>
+  <div class="panel"><div class="lbl">Batería 12 V</div>${lineChart(pts, 'battery_v', { min: 11.5, max: 14.5, fmt: v => nf(v, 1), color: 'var(--blue)' })}</div>
+  <div class="panel"><div class="lbl">Repostajes detectados</div>${rows}</div>`;
+}
+
+function viewAjustes() {
+  return `
+  <form class="panel" id="cfgForm">
+    <div class="lbl">Conexión con tu servidor</div>
+    <label for="fUrl">URL del Worker de Cloudflare
+      <input id="fUrl" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://fiesta-st-api.tu-usuario.workers.dev" value="${esc(cfg.url || '')}" required>
+    </label>
+    <label for="fKey">Contraseña (APP_KEY)
+      <input id="fKey" type="password" autocomplete="current-password" value="${esc(cfg.key || '')}" required>
+    </label>
+    <button class="btn" type="submit">Guardar y conectar</button>
+    ${cfg.url ? '<button class="btn sec" type="button" id="cancelCfg">Volver</button>' : ''}
+  </form>
+  <p class="muted">Se guarda solo en este móvil.</p>`;
+}
+
+function render() {
+  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  $('#nav').style.display = tab === 'ajustes' ? 'none' : 'flex';
+  const src = live && live.source === 'mock' ? '<span class="pill p-warn">Datos de prueba</span>' : '';
+  $('#badge').innerHTML = tab === 'ajustes' ? '' : src;
+  let html = error && tab !== 'ajustes' ? `<div class="err">${esc(error)}</div>` : '';
+  if (tab === 'ajustes') html += viewAjustes();
+  else if (!live) html += error ? '' : '<div class="panel"><p class="muted">Conectando con el coche…</p></div>';
+  else if (tab === 'estado') html += viewEstado(live);
+  else if (tab === 'motor') html += viewMotor(live);
+  else html += viewHistorial();
+  $('#main').innerHTML = html;
+
+  const form = $('#cfgForm');
+  if (form) {
+    form.onsubmit = e => {
+      e.preventDefault();
+      cfg = { url: $('#fUrl').value.trim(), key: $('#fKey').value };
+      try { localStorage.setItem('fst_cfg', JSON.stringify(cfg)); } catch (err) {}
+      tab = 'estado'; live = null; hist = null; histLoaded = 0; error = null;
+      render(); loadLive();
+    };
+    const back = $('#cancelCfg');
+    if (back) back.onclick = () => { tab = 'estado'; render(); schedule(); };
+  }
+}
+
+document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab; render();
+  if (tab === 'historial') loadHistory();
+});
+$('#cfgBtn').onclick = () => { clearTimeout(timer); tab = 'ajustes'; render(); };
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && cfg.url && tab !== 'ajustes') { loadLive(); if (tab === 'historial') loadHistory(true); }
+  else clearTimeout(timer);
+});
+
+render();
+if (cfg.url && cfg.key) loadLive();
+</script>
+</body>
+</html>
