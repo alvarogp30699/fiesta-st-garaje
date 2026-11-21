@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fiesta-st-api",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fiesta_st",
+      "database_id": "51cedab1-7b9c-41ba-a76d-f67a9b309ff7"
+    }
+  ],
+  "vars": {
+    "SOURCE": "mock"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "observability": { "enabled": true }
+}
