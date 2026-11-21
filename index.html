@@ -24,7 +24,7 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font-family:var(--body);-webkit-text-size-adjust:100%}
-body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);position:fixed;inset:0;height:auto;overflow:hidden}
+body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);position:fixed;top:0;left:0;right:0;bottom:auto;height:100vh;height:100dvh;height:var(--app-h,100dvh);overflow:hidden}
 header{padding:16px 20px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 main{flex:1;min-height:0;overflow-y:auto;padding:0 16px 24px;display:flex;flex-direction:column;gap:10px;-webkit-overflow-scrolling:touch}
 nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid var(--ln2);background:var(--bg);padding:6px 6px calc(8px + env(safe-area-inset-bottom))}
@@ -945,6 +945,18 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && cfg.url && tab !== 'ajustes') { loadLive(); loadFor(tab, true); } else clearTimeout(timer);
 });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+// Alto real de la pantalla: iOS en modo app (icono) a veces informa de menos alto y deja la parte de abajo cortada.
+function fitScreen() {
+  const portrait = window.matchMedia('(orientation: portrait)').matches;
+  let h = window.innerHeight;
+  if (navigator.standalone && screen.height) h = Math.max(h, portrait ? Math.max(screen.height, screen.width) : Math.min(screen.height, screen.width));
+  document.documentElement.style.setProperty('--app-h', h + 'px');
+}
+fitScreen();
+['resize', 'orientationchange', 'pageshow', 'focus'].forEach(ev => window.addEventListener(ev, () => { fitScreen(); setTimeout(fitScreen, 300); }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(fitScreen, 100); });
+setTimeout(fitScreen, 100); setTimeout(fitScreen, 800);
+
 
 render();
 if (cfg.url && cfg.key) {
