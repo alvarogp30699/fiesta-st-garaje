@@ -7,10 +7,10 @@ const AC = new Color('#ffd400'), OK = new Color('#2ee59d'), WA = new Color('#ffb
 const MU = new Color('#7d858f'), TX = new Color('#f4f5f6'), BG = new Color('#0a0b0d');
 
 async function ask(title, key, secure) {
-  if (Keychain.contains(key)) return Keychain.get(key);
+  if (Keychain.contains(key) && Keychain.get(key).trim()) return Keychain.get(key);
   const a = new Alert();
   a.title = title;
-  if (secure) a.addSecureTextField(''); else a.addTextField('https://fiesta-st-api.alvaroofimega.workers.dev');
+  if (secure) a.addSecureTextField('Contraseña'); else a.addTextField('URL', 'https://fiesta-st-api.alvaroofimega.workers.dev');
   a.addAction('Guardar');
   await a.present();
   const v = a.textFieldValue(0).trim();
@@ -27,7 +27,8 @@ try {
   r.headers = { 'x-app-key': pass };
   d = await r.loadJSON();
   if (d.error) { err = d.error; d = null; }
-} catch (e) { err = 'Sin conexión'; }
+} catch (e) { err = 'Sin conexión: ' + e.message; }
+if (err && /401|Contraseña/i.test(err)) Keychain.remove(PASS_KEY);
 
 const w = new ListWidget();
 w.backgroundColor = BG;
