@@ -293,7 +293,10 @@ function mapTelemetry(data) {
   } else if (lk && lk.value != null) locked = /LOCK/i.test(lk.value) && !/UNLOCK/i.test(lk.value);
   const pos = val('position');
   const loc = pos && pos.location && pos.location.lat != null ? { lat: +pos.location.lat, lon: +pos.location.lon } : null;
-  const gearRaw = val('gearLeverPosition');
+  // En cambio manual Ford solo informa la marcha atrás y se queda la última lectura: si es más vieja que el arranque, no vale.
+  const gUpd = m.gearLeverPosition && m.gearLeverPosition.updateTime ? Date.parse(m.gearLeverPosition.updateTime) : 0;
+  const iUpd = m.ignitionStatus && m.ignitionStatus.updateTime ? Date.parse(m.ignitionStatus.updateTime) : 0;
+  const gearRaw = gUpd && iUpd && gUpd < iUpd - 60e3 ? null : val('gearLeverPosition');
   let dataTs = 0;
   for (const k of ['ignitionStatus', 'position', 'odometer', 'fuelLevel', 'batteryVoltage']) {
     const t = m[k] && m[k].updateTime ? Date.parse(m[k].updateTime) : 0;
