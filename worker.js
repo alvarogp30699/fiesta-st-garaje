@@ -105,6 +105,7 @@ export default {
       if (m === 'GET' && p === '/api/export') return json(await exportAll(env));
       if (m === 'GET' && p === '/api/trips/records') return json(await tripRecords(env));
       if (m === 'GET' && p === '/api/fuel') return json(await nearbyFuel(env, url.searchParams));
+      if (m === 'POST' && p === '/api/fuel/fav') return json(await setFavStation(env, await req.json()));
       if (m === 'GET' && p === '/api/trips') return json(await listTrips(env, clampInt(url.searchParams.get('limit'), 1, 200, 40)));
       if (m === 'GET' && (mt = p.match(/^\/api\/trips\/(\d+)$/))) return json(await getTrip(env, +mt[1]));
       if (m === 'GET' && p === '/api/maintenance') return json(await listMaint(env));
@@ -1357,7 +1358,30 @@ async function nearbyFuel(env, qs) {
   const byPrice = near.slice().sort((a, b) => a.price - b.price || a.km - b.km);
   const nearest = near.slice().sort((a, b) => a.km - b.km)[0] || null;
   const avg = near.length ? round(near.reduce((s, x) => s + x.price, 0) / near.length, 3) : null;
-  return { type, date, radius_km: radius, count: near.length, avg, nearest, stations: byPrice.slice(0, 12) };
+  const fav = await favStation(env, type, lat, lon);
+  return { type, date, radius_km: radius, count: near.length, avg, nearest, stations: byPrice.slice(0, 12), fav };
+}
+
+// Gasolinera habitual: se muestra siempre con su precio de hoy, estés donde estés
+async function favStation(env, type, lat, lon) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_station'").first();
+  if (!row) return null;
+  const f = JSON.parse(row.v);
+  try {
+    const { list } = await fuelStations(env, f.prov);
+    const s = list.find(x => x.id === f.id);
+    if (!s) return { ...f, missing: true };
+    const key = 'p' + type;
+    return { ...s, prov: f.prov, price: s[key], km: lat != null ? round(distKm(lat, lon, s.lat, s.lon), 1) : null };
+  } catch (e) { return { ...f, missing: true }; }
+}
+
+async function setFavStation(env, b) {
+  if (!b || !b.id) { await env.DB.prepare("DELETE FROM kv WHERE k = 'fav_station'").run(); return { fav: null }; }
+  const lat = Number(b.lat), lon = Number(b.lon);
+  const f = { id: String(b.id), name: String(b.name || '').slice(0, 60), town: String(b.town || '').slice(0, 60), lat, lon, prov: provincesNear(lat, lon, 1)[0] };
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_station', ?)").bind(JSON.stringify(f)).run();
+  return { fav: f };
 }
 
 async function currentOdo(env) {

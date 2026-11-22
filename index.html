@@ -584,11 +584,23 @@ function viewDatos() {
     </button>`).join('') || '<p class="muted" style="padding:0 0 12px">Todavía no se ha detectado ningún repostaje.</p>';
   const st = fuel && fuel.stations ? fuel.stations.slice(0, 6) : [];
   const other = cfg.fuel === '95' ? '98' : '95';
-  const stations = st.map((s, i) => `
+  const favId = fuel && fuel.fav ? fuel.fav.id : null;
+  const star = s => `<button data-fav='${esc(JSON.stringify({ id: s.id, name: s.name, town: s.town, lat: s.lat, lon: s.lon }))}' aria-label="${s.id === favId ? 'Quitar como habitual' : 'Marcar como habitual'}" style="background:none;border:0;font-size:20px;min-width:40px;min-height:44px;color:${s.id === favId ? C.ac : '#3a4048'}">${s.id === favId ? '★' : '☆'}</button>`;
+  const f = fuel && fuel.fav && !fuel.fav.missing ? fuel.fav : null;
+  const favCard = f ? `<div class="pn pad col" style="gap:10px;border-color:${C.ac}55">
+    <div class="row"><span class="k" style="color:${C.ac}">★ Tu gasolinera</span>${star(f)}</div>
+    <a href="https://maps.apple.com/?daddr=${f.lat},${f.lon}" class="row" style="color:inherit;text-decoration:none;align-items:flex-end">
+      <span class="col" style="gap:2px"><span style="font-size:17px;font-weight:700">${esc(f.name)}</span><span style="font-size:12px;color:#7d858f">${esc(f.address || '')} · ${esc(f.town)}${f.km != null ? ' · ' + nf(f.km, 1) + ' km' : ''}</span></span>
+      <span class="col" style="gap:1px;align-items:flex-end"><span class="m" style="font-size:28px;font-weight:700;color:${C.ac}"><span style="font-size:11px;color:#7d858f;font-weight:500">${cfg.fuel} </span>${f.price ? nf(f.price, 3) : '—'}</span>
+      <span class="m" style="font-size:13px;color:#9aa2ab">${other} ${f['p' + other] ? nf(f['p' + other], 3) : 'no tiene'}</span></span></a>
+    ${st[0] && f.price && st[0].id !== f.id ? `<p class="muted">${st[0].price < f.price ? `Ahora mismo la más barata cerca del coche es ${esc(st[0].name)} (${esc(st[0].town)}) a ${nf(st[0].price, 3)}: ${nf((f.price - st[0].price) * 40, 2)} € menos en 40 L.` : 'Sigue siendo de las más baratas de la zona.'}</p>` : ''}
+    ${f.price && f.price < (fuel.avg || 9) ? `<p class="muted">Un depósito de 40 L ahí: ${nf(f.price * 40, 2)} € (media de la zona: ${nf(fuel.avg * 40, 2)} €).</p>` : ''}
+  </div>` : '';
+  const stations = st.map((s, i) => `<div style="display:grid;grid-template-columns:1fr auto;align-items:center">
     <a class="li" href="https://maps.apple.com/?daddr=${s.lat},${s.lon}" style="grid-template-columns:1fr auto;color:inherit;text-decoration:none">
       <span class="col" style="gap:2px;min-width:0"><span style="font-size:15px;font-weight:600">${esc(s.name)}</span><span style="font-size:12px;color:#7d858f">${esc(s.town)} · ${nf(s.km, 1)} km</span></span>
       <span class="col" style="gap:1px;align-items:flex-end"><span class="m" style="font-size:20px;font-weight:700;color:${i === 0 ? C.ac : C.tx}"><span style="font-size:11px;color:#7d858f;font-weight:500">${cfg.fuel} </span>${nf(s.price, 3)}</span><span class="m" style="font-size:13px;color:#9aa2ab">${other} ${s['p' + other] ? nf(s['p' + other], 3) : '—'}</span></span>
-    </a>`).join('');
+    </a>${star(s)}</div>`).join('');
   return `
   <div class="g2">
     ${kv('Consumo medio', nf(refuels.avg_l100, 1), 'l/100')}
@@ -601,6 +613,7 @@ function viewDatos() {
   <div class="pn pad col" style="gap:10px"><div class="row"><span class="k">Batería · mínimo diario</span>${trendTag(battery)}</div>
     ${batteryBars(battery && battery.days)}
     <p class="muted">Por debajo de 12,2 V (línea roja) la batería sufre. Si baja día a día con el coche parado, revísala antes de que no arranque.</p></div>
+  ${favCard}
   <div class="pn" style="padding:4px 16px">
     <div class="row" style="padding:12px 0"><span class="k">Gasolina ${cfg.fuel} cerca del coche</span>${fuel && fuel.date ? `<span style="font-size:11px;color:#7d858f">Ministerio · ${esc(String(fuel.date).slice(0, 16))}</span>` : ''}</div>
     ${stations || `<p class="muted" style="padding:0 0 12px">${esc(fuelErr || 'Cargando precios…')}</p>`}
@@ -909,6 +922,13 @@ function afterRender() {
     if (!parking) { try { parking = await api('/api/parking'); } catch (e) { error = e.message; render(); return; } }
     sheet = { type: 'parking' }; render();
   };
+  document.querySelectorAll('[data-fav]').forEach(b => b.onclick = async e => {
+    e.preventDefault();
+    const s = JSON.parse(b.dataset.fav);
+    const off = fuel && fuel.fav && fuel.fav.id === s.id;
+    try { await api('/api/fuel/fav', { method: 'POST', body: JSON.stringify(off ? {} : s) }); flash(off ? 'Quitada como habitual' : 'Guardada como tu gasolinera'); loaded.fuel = 0; await loadFor(tab, false); render(); }
+    catch (err) { error = err.message; render(); }
+  });
   document.querySelectorAll('[data-tyreset]').forEach(b => b.onclick = () => { sheet = { type: 'tyreset' }; render(); });
   document.querySelectorAll('[data-tyrerot]').forEach(b => b.onclick = async () => {
     try { tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ rotated: true }) }); flash('Rotación apuntada'); render(); } catch (e) { error = e.message; render(); }
