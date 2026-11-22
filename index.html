@@ -319,6 +319,17 @@ const maps = {};
 function mapIn(id, host, opts = {}) {
   if (!window.L || !host) return null;
   let m = maps[id];
+  if (opts.fresh) {
+    // Mapa nuevo dentro del propio hueco (ya está en la página y tiene tamaño)
+    if (m) { try { m.map.remove(); } catch (e) {} }
+    host.style.height = host.style.height || '220px';
+    const map = L.map(host, { zoomControl: false, attributionControl: true, scrollWheelZoom: false, boxZoom: false, keyboard: false });
+    L.tileLayer(TILE, { attribution: '© OpenStreetMap · © CARTO', maxZoom: 19, subdomains: 'abcd' }).addTo(map);
+    m = maps[id] = { el: host, map, layer: L.layerGroup().addTo(map), fit: null };
+    const refit = () => { map.invalidateSize(); if (m.fit) m.fit(); };
+    requestAnimationFrame(refit); setTimeout(refit, 300); setTimeout(refit, 900);
+    return m;
+  }
   if (!m) {
     const el = document.createElement('div');
     el.className = host.className;
@@ -661,6 +672,7 @@ function viewAjustes() {
          <div class="btns"><button class="btn" id="pushOn">${pushOn ? 'Volver a activar' : 'Activar avisos'}</button><button class="btn sec" id="pushTest">Enviar prueba</button></div>`
       : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
   </div>
+  <p class="muted" style="padding:0 4px;font-size:11px">Pantalla: ${innerHeight} · ${screen.width}×${screen.height} · ${standalone ? 'app' : 'navegador'} · ${getComputedStyle(document.documentElement).getPropertyValue('--app-h') || '—'} · cuerpo ${Math.round(document.body.getBoundingClientRect().height)}</p>
   <div class="pn pad col" style="gap:10px">
     <span class="k">Widget en la pantalla de inicio</span>
     <p class="muted">1. Instala la app gratuita <b>Scriptable</b> de la App Store.<br>2. Copia el código, abre Scriptable, toca + y pégalo.<br>3. Ejecútalo una vez: te pide la URL y la contraseña.<br>4. Mantén pulsado el escritorio → + → Scriptable → elige el script.</p>
@@ -842,7 +854,7 @@ function afterRender() {
   }
   const th = $('#tripMapHost');
   if (th && tripDetail) {
-    const m = mapIn('trip', th);
+    const m = mapIn('trip', th, { fresh: true });
     if (m) {
       m.layer.clearLayers();
       const p = tripDetail.points;
@@ -1081,7 +1093,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').ca
 function fitScreen() {
   const portrait = window.matchMedia('(orientation: portrait)').matches;
   let h = window.innerHeight;
-  if (navigator.standalone && screen.height) h = Math.max(h, portrait ? Math.max(screen.height, screen.width) : Math.min(screen.height, screen.width));
+  if (standalone && screen.height) h = Math.max(h, portrait ? Math.max(screen.height, screen.width) : Math.min(screen.height, screen.width));
   document.documentElement.style.setProperty('--app-h', h + 'px');
 }
 fitScreen();
