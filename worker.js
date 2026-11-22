@@ -131,10 +131,12 @@ export default {
     if (poll) {
       try { await ingest(env, await readCar(env), st); } catch (e) { console.error('ingest', e); }
     }
-    // En marcha el coche casi no manda nada por su cuenta: se le pide el estado cada 2 min (máx. 3 h por trayecto)
+    // En marcha el coche casi no manda nada por su cuenta: se le pide el estado cada 2 min la primera hora
+    // y cada 5 min después (viajes largos), hasta 8 h por trayecto.
     const st2 = await loadState(env);
-    if (src(env) === 'ford' && st2.trip && Date.now() - st2.trip.start_ts < 3 * 3600e3) {
-      try { await fordRefresh(env, { auto: true }); } catch (e) { console.error('autorefresh', e); }
+    const age = st2.trip ? Date.now() - st2.trip.start_ts : 0;
+    if (src(env) === 'ford' && st2.trip && age < 8 * 3600e3) {
+      try { await fordRefresh(env, { auto: true, every: age < 3600e3 ? 115e3 : 295e3 }); } catch (e) { console.error('autorefresh', e); }
     }
     await parkingTimer(env);
     await daily(env, event.scheduledTime);
@@ -346,7 +348,7 @@ function mapTelemetry(data) {
 async function fordRefresh(env, opts = {}) {
   if (src(env) !== 'ford') return { ok: false, error: 'Solo funciona con el coche real conectado.' };
   const last = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_refresh_at'").first();
-  const wait = last ? (opts.auto ? 115e3 : 600e3) - (Date.now() - Number(last.v)) : 0;
+  const wait = last ? (opts.auto ? (opts.every || 115e3) : 600e3) - (Date.now() - Number(last.v)) : 0;
   if (opts.auto && wait > 0) return { ok: false };
   if (wait > 0) return { ok: false, error: `Ya se pidió hace poco. Espera ${Math.ceil(wait / 60e3)} min para no gastar batería.` };
   const f = await fordTokens(env);
