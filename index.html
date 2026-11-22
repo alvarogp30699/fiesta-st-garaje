@@ -328,7 +328,10 @@ function mapIn(id, host, opts = {}) {
   }
   host.replaceWith(m.el);
   m.map.invalidateSize();
-  requestAnimationFrame(() => m.map.invalidateSize());
+  m.fit = null;
+  // El mapa se crea fuera de la página y al principio mide 0: se vuelve a encuadrar cuando ya tiene tamaño.
+  const refit = () => { m.map.invalidateSize(); if (m.fit) m.fit(); };
+  requestAnimationFrame(refit); setTimeout(refit, 250); setTimeout(refit, 800);
   return m;
 }
 const dot = (ll, color, r = 7) => L.circleMarker(ll, { radius: r, color: '#0a0b0d', weight: 3, fillColor: color, fillOpacity: 1 });
@@ -516,7 +519,7 @@ function viewTrip(t) {
   ${t.circuit ? `<div class="pn pad row"><span class="k" style="color:${C.ac}">🏁 ${esc(t.circuit)}</span><span style="font-size:12px;color:#7d858f">Sesión en circuito</span></div>` : ''}
   <div class="pn" style="overflow:hidden;position:relative"><div id="tripMapHost" class="map"></div>
     <div class="m" style="position:absolute;left:10px;bottom:22px;z-index:500;display:flex;gap:10px;background:rgba(10,11,13,.85);border-radius:8px;padding:6px 10px;font-size:11px">
-      <span style="color:${C.ac}">● &lt;70</span><span style="color:${C.wa}">● 70–95</span><span style="color:${C.bad}">● &gt;95 km/h</span></div></div>
+      ${t.max_speed == null ? `<span style="color:${C.ok}">● Salida</span><span style="color:#f4f5f6">● Llegada</span>` : `<span style="color:${C.ac}">● &lt;70</span><span style="color:${C.wa}">● 70–95</span><span style="color:${C.bad}">● &gt;95 km/h</span>`}</div></div>
   <div class="g2">${kv('Distancia', nf(t.km, 1), 'km')}${kv('Tiempo', clock(t.duration_s))}</div>
   ${cmp}
   <div class="pn" style="padding:4px 16px">
@@ -835,7 +838,7 @@ function afterRender() {
   const ph = $('#parkMapHost');
   if (ph && live && live.location) {
     const m = mapIn('park', ph, { mini: true });
-    if (m) { const ll = [live.location.lat, live.location.lon]; m.layer.clearLayers(); dot(ll, C.ac, 6).addTo(m.layer); m.map.setView(ll, 15); }
+    if (m) { const ll = [live.location.lat, live.location.lon]; m.layer.clearLayers(); dot(ll, C.ac, 6).addTo(m.layer); m.fit = () => m.map.setView(ll, 15); m.fit(); }
   }
   const th = $('#tripMapHost');
   if (th && tripDetail) {
@@ -847,7 +850,9 @@ function afterRender() {
       if (p.length) {
         dot([p[0][0], p[0][1]], C.ok).addTo(m.layer);
         dot([p[p.length - 1][0], p[p.length - 1][1]], '#f4f5f6').addTo(m.layer);
-        if (p.length > 1) m.map.fitBounds(L.latLngBounds(p.map(q => [q[0], q[1]])), { padding: [24, 24] }); else m.map.setView([p[0][0], p[0][1]], 15);
+        const b = L.latLngBounds(p.map(q => [q[0], q[1]]));
+        m.fit = () => b.isValid() && !b.getNorthEast().equals(b.getSouthWest()) ? m.map.fitBounds(b, { padding: [28, 28], maxZoom: 16 }) : m.map.setView([p[0][0], p[0][1]], 15);
+        m.fit();
       }
     }
   }
