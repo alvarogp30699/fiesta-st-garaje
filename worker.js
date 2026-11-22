@@ -716,6 +716,7 @@ async function prepare(env) {
   ]);
   try { await db.prepare('ALTER TABLE trips ADD COLUMN track INTEGER DEFAULT 0').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE trips ADD COLUMN circuit TEXT').run(); } catch (e) { /* ya existe */ }
+  try { await db.prepare('ALTER TABLE refuels ADD COLUMN price_l REAL').run(); } catch (e) { /* ya existe */ }
   const mc = await db.prepare('SELECT COUNT(*) AS n FROM maintenance').first();
   if (!mc.n) {
     await db.batch(DEFAULT_MAINT.map(([n, km, mo]) =>
@@ -868,7 +869,7 @@ const hhmm = ts => new Date(ts + 3600e3).toISOString().slice(11, 16);
 // Precio por litro para un momento dado: último repostaje con precio antes de esa fecha,
 // si no el más reciente, si no la media de gasolineras cercanas, si no 1,70 €/L.
 async function priceFinder(env) {
-  const { results } = await env.DB.prepare('SELECT ts, price_total / litres AS pl FROM refuels WHERE price_total > 0 AND litres > 0 ORDER BY ts').all();
+  const { results } = await env.DB.prepare('SELECT ts, COALESCE(price_l, price_total / litres) AS pl FROM refuels WHERE price_l > 0 OR (price_total > 0 AND litres > 0) ORDER BY ts').all();
   let fallback = 1.70;
   const fc = await env.DB.prepare("SELECT v FROM kv WHERE k LIKE 'fuel_cache_%' LIMIT 1").first();
   if (fc) {
