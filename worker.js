@@ -4,7 +4,7 @@
 // SOURCE = "mock" (coche simulado) o "ford" (coche real).
 
 const SCHEMA = '3';
-const TANK_L = 42;               // depósito Fiesta ST Mk8
+const TANK_L = 45;               // depósito Fiesta ST Mk8
 const LIVE_MIN_INTERVAL_S = 30;  // con Ford real: no consultar más a menudo
 const GAP_PARKED_S = 300;        // registro del histórico aparcado
 const GAP_DRIVING_S = 60;        // registro del histórico en marcha
