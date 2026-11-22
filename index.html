@@ -730,7 +730,8 @@ function sheetHtml() {
     const r = sheet.item;
     return `<form class="sheet" id="sheetForm">
       <span class="k">Repostaje del ${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</span>
-      <span class="m" style="font-size:34px;font-weight:700">${nf(r.litres, 1)} L <span style="font-size:13px;color:#7d858f;font-weight:500">estimados por el depósito</span></span>
+      <label for="sLitres">Litros del tique<input id="sLitres" inputmode="decimal" value="${r.litres != null ? nf(r.litres, 2) : ''}" placeholder="41,00"></label>
+      <p class="muted">Pon los litros reales del surtidor: si llenaste el depósito, con ellos se corrige el cálculo de consumo de los trayectos.</p>
       ${r.price_auto ? '<p class="muted">Precio calculado con la gasolinera más cercana. Corrígelo con el del tique si quieres.</p>' : ''}
       <label for="sPrice">Precio total (€)<input id="sPrice" inputmode="decimal" value="${r.price_total != null ? nf(r.price_total, 2) : ''}" placeholder="52,30"></label>
       <label for="sStation">Gasolinera<input id="sStation" value="${esc(r.station || '')}" placeholder="Repsol Salou"></label>
@@ -1030,7 +1031,7 @@ function bindSheet() {
         sheet = null; flash('Nota guardada');
       } else if (sheet.type === 'refuel') {
         const price = $('#sPrice').value.trim();
-        await api('/api/refuels/' + sheet.item.ts, { method: 'POST', body: JSON.stringify({ price_total: price ? num(price) : null, station: $('#sStation').value.trim() }) });
+        await api('/api/refuels/' + sheet.item.ts, { method: 'POST', body: JSON.stringify({ price_total: price ? num(price) : null, station: $('#sStation').value.trim(), litres: $('#sLitres').value.trim() || null }) });
         refuels = await api('/api/refuels'); loaded.datos = Date.now();
         sheet = null; flash('Repostaje guardado');
       } else {

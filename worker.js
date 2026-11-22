@@ -555,7 +555,8 @@ function processCar(db, st, c, opts = {}) {
       if (c.data_ts && c.data_ts > t.start_ts) t.end_ts = c.data_ts; // hora real a la que se apagó
       const dur = Math.max(60, Math.round((t.end_ts - t.start_ts) / 1000));
       const noLive = !t.moving; // el coche no mandó nada en marcha: sin velocidad ni rpm reales
-      const usedL = Math.max(0, ((t.start_fuel - (c.fuel_pct ?? t.end_fuel)) / 100) * TANK_L);
+      // El aforador no es lineal: se corrige con el factor calibrado en los repostajes (litros reales / litros según aforador)
+      const usedL = Math.max(0, ((t.start_fuel - (c.fuel_pct ?? t.end_fuel)) / 100) * TANK_L) * (opts.fuelFactor || 1);
       const pts = t.pts.slice();
       if (c.location) pts.push([c.location.lat, c.location.lon, 0, c.data_ts || c.ts]);
       const end = c.location ? [c.location.lat, c.location.lon] : t.end;
@@ -609,7 +610,8 @@ async function ingest(env, car, st) {
   st = st || await loadState(env);
   applyTyrePrefs(car, await getTyrePrefs(env));
   const guard = await getGuard(env);
-  const { stmts, notes } = processCar(env.DB, st, car, { guard });
+  const ff = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_factor'").first();
+  const { stmts, notes } = processCar(env.DB, st, car, { guard, fuelFactor: ff ? Number(ff.v) : 1 });
   if (car.ignition === 'off' && car.location && !st.parked) {
     st.parked = { ts: car.data_ts || car.ts, lat: car.location.lat, lon: car.location.lon };
     const has = await env.DB.prepare("SELECT 1 AS x FROM kv WHERE k = 'parking'").first();
@@ -821,7 +823,27 @@ async function getRefuels(env) {
   return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L };
 }
 
+// Calibra el aforador: litros reales del repostaje frente a lo que marcó el depósito desde el anterior lleno
+async function calibrateFuel(env, ts, litres) {
+  const prev = await env.DB.prepare('SELECT ts, fuel_after FROM refuels WHERE ts < ? ORDER BY ts DESC LIMIT 1').bind(ts).first();
+  const cur = await env.DB.prepare('SELECT fuel_before, fuel_after FROM refuels WHERE ts = ?').bind(ts).first();
+  if (!prev || !cur || cur.fuel_before == null || cur.fuel_after < 95 || prev.fuel_after < 95) return null;
+  const gauge = ((prev.fuel_after - cur.fuel_before) / 100) * TANK_L;
+  if (gauge < 10) return null;
+  const f = Math.min(1.25, Math.max(0.75, litres / gauge));
+  const old = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_factor'").first();
+  const nf = old ? round(Number(old.v) * 0.5 + f * 0.5, 3) : round(f, 3);
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fuel_factor', ?)").bind(String(nf)).run();
+  return nf;
+}
+
 async function updateRefuel(env, ts, body) {
+  if (body.litres != null && body.litres !== '') {
+    const l = Number(String(body.litres).replace(',', '.'));
+    if (!(l > 1 && l <= TANK_L + 2)) throw httpError('Los litros no son válidos', 400);
+    await env.DB.prepare('UPDATE refuels SET litres = ? WHERE ts = ?').bind(l, ts).run();
+    await calibrateFuel(env, ts, l);
+  }
   const price = body.price_total === null || body.price_total === '' ? null : Number(body.price_total);
   if (price !== null && !(price > 0 && price < 1000)) throw httpError('El precio no es válido', 400);
   const station = body.station ? String(body.station).slice(0, 80) : null;
