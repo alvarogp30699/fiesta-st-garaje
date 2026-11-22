@@ -563,8 +563,8 @@ function viewDatos() {
     <button class="li" data-refuel="${r.ts}" style="grid-template-columns:1fr auto">
       <span class="col" style="gap:2px"><span style="font-size:15px;font-weight:600">${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}${r.station ? ' · ' + esc(r.station) : ''}</span>
       <span style="font-size:12px;color:#7d858f">${nf(r.odometer)} km${r.l100 ? ' · ' + nf(r.l100, 1) + ' l/100' : ''}</span></span>
-      <span class="col" style="gap:2px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${nf(r.litres, 1)} L</span>
-      <span style="font-size:12px;color:${r.price_total ? C.mu : C.ac}">${r.price_total ? nf(r.price_total, 2) + ' €' + (r.price_auto ? ' · estimado' : ' · ' + nf(r.price_l, 3) + ' €/L') : 'Añadir precio'}</span></span>
+      <span class="col" style="gap:2px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${r.litres != null ? nf(r.litres, 1) + ' L' : 'Lleno'}</span>
+      <span style="font-size:12px;color:${r.price_total || r.price_l ? C.mu : C.ac}">${r.price_total ? nf(r.price_total, 2) + ' €' + (r.price_auto ? ' · estimado' : ' · ' + nf(r.price_l, 3) + ' €/L') : r.price_l ? nf(r.price_l, 3) + ' €/L' : 'Añadir precio'}</span></span>
     </button>`).join('') || '<p class="muted" style="padding:0 0 12px">Todavía no se ha detectado ningún repostaje.</p>';
   const st = fuel && fuel.stations ? fuel.stations.slice(0, 6) : [];
   const other = cfg.fuel === '95' ? '98' : '95';

@@ -812,9 +812,9 @@ async function getRefuels(env) {
     if (p) {
       km = round(r.odometer - p.odometer, 1);
       const used = ((p.fuel_after - r.fuel_before) / 100) * TANK_L;
-      if (km > 20) { l100 = round((used / km) * 100, 1); totalUsed += used; totalKm += km; }
+      if (km > 20 && r.fuel_before != null && p.fuel_after != null) { l100 = round((used / km) * 100, 1); totalUsed += used; totalKm += km; }
     }
-    const price_l = r.price_total && r.litres ? round(r.price_total / r.litres, 3) : null;
+    const price_l = r.price_total && r.litres ? round(r.price_total / r.litres, 3) : r.price_l ?? null;
     return { ...r, km, l100, price_l };
   }).reverse();
   return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L };
