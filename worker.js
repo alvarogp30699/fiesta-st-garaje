@@ -330,7 +330,7 @@ function mapTelemetry(data) {
     parking_brake: val('parkingBrakeStatus') ? /ON|ENGAGED/i.test(String(val('parkingBrakeStatus'))) : null,
     alarm: val('alarmStatus') || null,
     speed_kmh: running ? Math.round((num(val('speed')) || 0) * 3.6) : 0, // Ford la manda en m/s
-    gear: running ? (GEARS[String(gearRaw).toUpperCase()] ?? gearRaw ?? null) : null,
+    gear: running ? (GEARS[String(gearRaw).toUpperCase()] ?? gearRaw ?? gearFrom(Math.round((num(val('speed')) || 0) * 3.6), num(val('engineSpeed')))) : null,
     rpm: running ? Math.round(num(val('engineSpeed')) || 0) : 0,
     throttle_pct: running ? Math.round(num(val('acceleratorPedalPosition')) || 0) : 0,
     brake_pct: running && (brake === true || /ON|APPLIED|PRESS/i.test(String(brake))) ? 100 : 0,
@@ -494,7 +494,8 @@ function processCar(db, st, c, opts = {}) {
   const ignChanged = st.last && (st.last.ignition !== 'off') !== running;
 
   // Histórico y repostajes
-  if (!st.last || c.ts - st.last.ts >= gap * 1000 || ignChanged) {
+  const sameData = c.data_ts && st.last && st.last.dts === c.data_ts && c.ts - st.last.ts < 1800e3;
+  if ((!st.last || c.ts - st.last.ts >= gap * 1000 || ignChanged) && !(sameData && !ignChanged)) {
     stmts.push(db.prepare('INSERT OR REPLACE INTO snapshots VALUES (?, ?, ?, ?, ?)')
       .bind(c.ts, c.odometer_km, c.fuel_pct, c.battery_v, JSON.stringify(c)));
     if (st.snapFuel != null && c.fuel_pct - st.snapFuel >= 15) {
@@ -505,7 +506,7 @@ function processCar(db, st, c, opts = {}) {
       st.newRefuel = { ts: c.ts, litres, lat: c.location?.lat, lon: c.location?.lon };
     }
     st.snapFuel = c.fuel_pct;
-    st.last = { ts: c.ts, ignition: c.ignition };
+    st.last = { ts: c.ts, ignition: c.ignition, dts: c.data_ts || null };
   }
 
   // Trayectos
@@ -860,10 +861,49 @@ async function getTrip(env, id) {
   }
   const price = await priceFinder(env);
   if (route) route.avg_cost_eur = r2(route.avg_l100 != null ? route.avg_l100 / 100 * t.km * price(t.start_ts) : null);
-  return { ...t, points: JSON.parse(t.points || '[]'), route, cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+  return { ...t, points: JSON.parse(t.points || '[]'), route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
 }
 
 const r2 = v => v == null ? null : Math.round(v * 100) / 100;
+// Relación km/h por cada 1.000 rpm de cada marcha (Fiesta ST Mk8, aprox.): sirve para deducir la marcha,
+// porque en cambio manual Ford no la manda.
+const GEAR_KMH_PER_1000 = [7.6, 13.4, 20.3, 27.0, 33.6, 40.6];
+function gearFrom(speed, rpm) {
+  if (!speed || speed < 8 || !rpm || rpm < 1100) return null;
+  const r = speed / (rpm / 1000);
+  let best = null, err = 1e9;
+  GEAR_KMH_PER_1000.forEach((g, i) => { const e = Math.abs(r - g) / g; if (e < err) { err = e; best = i + 1; } });
+  return err < 0.12 ? best : null; // embrague pisado o punto muerto: sin marcha
+}
+
+// Lecturas del coche durante el trayecto (una por cada dato nuevo que mandó)
+async function tripSeries(env, t) {
+  const { results } = await env.DB.prepare('SELECT data FROM snapshots WHERE ts BETWEEN ? AND ? ORDER BY ts')
+    .bind(t.start_ts - 60e3, t.end_ts + 300e3).all();
+  const seen = new Set(), series = [];
+  for (const r of results) {
+    let c; try { c = JSON.parse(r.data); } catch (e) { continue; }
+    const k = c.data_ts || c.ts;
+    if (seen.has(k) || k < t.start_ts - 60e3 || k > t.end_ts + 60e3) continue;
+    seen.add(k);
+    const ty = c.tyres || {};
+    series.push({ ts: k, spd: c.speed_kmh || 0, rpm: c.rpm || 0, temp: c.oil_c ?? c.coolant_c ?? null, fuel: c.fuel_pct, bat: c.battery_v,
+      thr: c.throttle_pct || 0, brake: c.brake_pct || 0, gear: gearFrom(c.speed_kmh, c.rpm),
+      tf: ty.fl != null && ty.fr != null ? r2((ty.fl + ty.fr) / 2) : null, tr: ty.rl != null && ty.rr != null ? r2((ty.rl + ty.rr) / 2) : null });
+  }
+  const moving = series.filter(p => p.spd > 0);
+  const stats = series.length > 3 ? {
+    highway_pct: moving.length ? Math.round(moving.filter(p => p.spd >= 90).length / moving.length * 100) : null,
+    city_pct: moving.length ? Math.round(moving.filter(p => p.spd < 50).length / moving.length * 100) : null,
+    cruise_rpm: (() => { const h = series.filter(p => p.spd >= 110 && p.spd <= 125); return h.length ? Math.round(h.reduce((a, p) => a + p.rpm, 0) / h.length) : null; })(),
+    warm_min: (() => { const w = series.find(p => p.temp != null && p.temp >= OIL_WARM); return w ? Math.max(0, Math.round((w.ts - t.start_ts) / 60e3)) : null; })(),
+    tyre_rise: (() => { const a = series.find(p => p.tf != null), b = [...series].reverse().find(p => p.tf != null); return a && b ? { front: r2(b.tf - a.tf), rear: r2(b.tr - a.tr), from: [a.tf, a.tr], to: [b.tf, b.tr] } : null; })(),
+    alternator_v: (() => { const v = series.filter(p => p.rpm > 1500 && p.bat).map(p => p.bat); return v.length ? r2(v.reduce((a, b) => a + b, 0) / v.length) : null; })(),
+    gears: (() => { const g = {}; for (const p of series) if (p.gear) g[p.gear] = (g[p.gear] || 0) + 1; return g; })()
+  } : null;
+  return { series, stats };
+}
+
 const hhmm = ts => new Date(ts + 3600e3).toISOString().slice(11, 16);
 
 // Precio por litro para un momento dado: último repostaje con precio antes de esa fecha,
