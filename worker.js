@@ -131,6 +131,11 @@ export default {
     if (poll) {
       try { await ingest(env, await readCar(env), st); } catch (e) { console.error('ingest', e); }
     }
+    // En marcha el coche casi no manda nada por su cuenta: se le pide el estado cada 2 min (máx. 3 h por trayecto)
+    const st2 = await loadState(env);
+    if (src(env) === 'ford' && st2.trip && Date.now() - st2.trip.start_ts < 3 * 3600e3) {
+      try { await fordRefresh(env, { auto: true }); } catch (e) { console.error('autorefresh', e); }
+    }
     await parkingTimer(env);
     await daily(env, event.scheduledTime);
   }
@@ -338,16 +343,17 @@ function mapTelemetry(data) {
 
 // Pide al coche que se despierte y mande datos nuevos (como hace la app de Ford al abrirla).
 // Limitado a una vez cada 10 minutos para no gastar batería.
-async function fordRefresh(env) {
+async function fordRefresh(env, opts = {}) {
   if (src(env) !== 'ford') return { ok: false, error: 'Solo funciona con el coche real conectado.' };
   const last = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_refresh_at'").first();
-  const wait = last ? 600e3 - (Date.now() - Number(last.v)) : 0;
+  const wait = last ? (opts.auto ? 115e3 : 600e3) - (Date.now() - Number(last.v)) : 0;
+  if (opts.auto && wait > 0) return { ok: false };
   if (wait > 0) return { ok: false, error: `Ya se pidió hace poco. Espera ${Math.ceil(wait / 60e3)} min para no gastar batería.` };
   const f = await fordTokens(env);
   const r = await fetch(`${FORD.TMC}/v1/command/vehicles/${f.vin}/commands`, {
     method: 'POST',
     headers: { authorization: 'Bearer ' + f.tmc, 'content-type': 'application/json', 'user-agent': FORD.UA },
-    body: JSON.stringify({ properties: {}, tags: {}, type: 'statusRefresh', wakeUp: true })
+    body: JSON.stringify({ properties: {}, tags: {}, type: 'statusRefresh', wakeUp: !opts.auto })
   });
   await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford_refresh_at', ?)").bind(String(Date.now())).run();
   await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
@@ -507,13 +513,18 @@ function processCar(db, st, c, opts = {}) {
         notes.push({ title: '⚠️ El coche se ha encendido', body: `Tu Fiesta ST se ha puesto en marcha a las ${hhmm(c.ts)}. Si no eres tú, revisa dónde está.`, url: '#estado', tag: 'guard', urgent: true });
       }
       st.trip = {
-        start_ts: c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c ?? c.coolant_c,
+        start_ts: c.data_ts && c.data_ts < c.ts ? c.data_ts : c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c ?? c.coolant_c,
         start: c.location ? [c.location.lat, c.location.lon] : null, track: !!c.track,
-        pts: [], n: 0, spd: 0, thr: 0, hi: 0, max_speed: 0, max_rpm: 0, max_oil: 0, warm: false
+        pts: [], n: 0, spd: 0, thr: 0, hi: 0, max_speed: 0, max_rpm: 0, max_oil: 0, warm: false, moving: 0, last_dts: 0
       };
     }
     const t = st.trip;
+    // Solo cuentan las lecturas nuevas (Ford repite la última hasta que el coche manda otra)
+    const fresh = !c.data_ts || c.data_ts !== t.last_dts;
+    t.last_dts = c.data_ts || 0;
+    if (fresh) {
     t.n++;
+    if ((c.speed_kmh || 0) > 0) t.moving = (t.moving || 0) + 1;
     t.spd += c.speed_kmh || 0;
     t.thr += c.throttle_pct || 0;
     if ((c.rpm || 0) >= 4000) t.hi++;
@@ -524,7 +535,9 @@ function processCar(db, st, c, opts = {}) {
     if (c.location) {
       t.end = [c.location.lat, c.location.lon];
       const lp = t.pts[t.pts.length - 1];
-      if (!lp || c.ts - lp[3] >= POINT_GAP_S * 1000) t.pts.push([c.location.lat, c.location.lon, c.speed_kmh || 0, c.ts]);
+      const pts_ts = c.data_ts || c.ts;
+      if (!lp || pts_ts - lp[3] >= POINT_GAP_S * 1000) t.pts.push([c.location.lat, c.location.lon, c.speed_kmh || 0, pts_ts]);
+    }
     }
     const warmT = c.oil_c ?? c.coolant_c, warmMax = c.oil_c != null ? OIL_WARM : 85;
     if (!t.warm && t.start_oil != null && t.start_oil < 60 && warmT >= warmMax) {
@@ -536,17 +549,19 @@ function processCar(db, st, c, opts = {}) {
     const endOdo = c.odometer_km ?? t.end_odo;
     const km = round(endOdo - t.start_odo, 1);
     if (km >= 0.3) {
+      if (c.data_ts && c.data_ts > t.start_ts) t.end_ts = c.data_ts; // hora real a la que se apagó
       const dur = Math.max(60, Math.round((t.end_ts - t.start_ts) / 1000));
+      const noLive = !t.moving; // el coche no mandó nada en marcha: sin velocidad ni rpm reales
       const usedL = Math.max(0, ((t.start_fuel - (c.fuel_pct ?? t.end_fuel)) / 100) * TANK_L);
       const pts = t.pts.slice();
-      if (c.location) pts.push([c.location.lat, c.location.lon, 0, c.ts]);
+      if (c.location) pts.push([c.location.lat, c.location.lon, 0, c.data_ts || c.ts]);
       const end = c.location ? [c.location.lat, c.location.lon] : t.end;
       const sess = tripCircuit(t, pts, c);
       stmts.push(db.prepare(`INSERT INTO trips (start_ts, end_ts, start_odo, end_odo, km, duration_s, avg_speed, max_speed,
           max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l, start_lat, start_lon, end_lat, end_lon, points, track, circuit)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(t.start_ts, t.end_ts, t.start_odo, endOdo, km, dur, Math.round(km / (dur / 3600)), t.max_speed,
-          t.max_rpm, t.max_oil, Math.round(t.thr / t.n), Math.round((t.hi / t.n) * 100), round(usedL, 2),
+        .bind(t.start_ts, t.end_ts, t.start_odo, endOdo, km, dur, Math.round(km / (dur / 3600)), noLive ? null : t.max_speed,
+          noLive ? null : t.max_rpm, Math.max(t.max_oil, c.oil_c ?? c.coolant_c ?? 0), noLive ? null : Math.round(t.thr / Math.max(1, t.n)), noLive ? null : Math.round((t.hi / Math.max(1, t.n)) * 100), round(usedL, 2),
           t.start?.[0] ?? null, t.start?.[1] ?? null, end?.[0] ?? null, end?.[1] ?? null, JSON.stringify(pts), sess.track ? 1 : 0, sess.circuit));
     }
     st.trip = null;

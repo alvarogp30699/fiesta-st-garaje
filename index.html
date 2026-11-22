@@ -487,7 +487,7 @@ function viewViajes() {
     if (d !== day) { flush(); day = d; group = ''; }
     group += `<button class="li" data-trip="${t.id}" style="grid-template-columns:34px 1fr 92px">
       <span class="m" style="font-size:13px;color:#7d858f;font-weight:600">#${pad2(t.id)}</span>
-      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}${t.track ? ` <span class="tag" style="color:${C.ac};border-color:#4a4210;font-size:10px">${t.circuit ? '🏁 ' + esc(t.circuit.replace('Circuito de ', '')) : 'Circuito'}</span>` : ''}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)} · máx. ${nf(t.max_speed)}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
+      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}${t.track ? ` <span class="tag" style="color:${C.ac};border-color:#4a4210;font-size:10px">${t.circuit ? '🏁 ' + esc(t.circuit.replace('Circuito de ', '')) : 'Circuito'}</span>` : ''}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)}${t.max_speed != null ? ' · máx. ' + nf(t.max_speed) : ''}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
       <span class="col" style="gap:4px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${nf(t.km, 1)} km</span>${spark(t.spark)}</span>
     </button>`;
   }
@@ -521,13 +521,13 @@ function viewTrip(t) {
   ${cmp}
   <div class="pn" style="padding:4px 16px">
     ${trow('Velocidad media', nf(t.avg_speed), 'km/h')}${trow('Velocidad punta', nf(t.max_speed), 'km/h', true)}
-    ${trow('Régimen máximo', nf(t.max_rpm), 'rpm')}${trow('Aceite máximo', nf(t.max_oil), '°C')}
+    ${trow('Régimen máximo', nf(t.max_rpm), 'rpm')}${trow('Motor al acabar (máx.)', nf(t.max_oil), '°C')}
     ${trow('Acelerador medio', nf(t.avg_throttle), '%')}${trow('Sobre 4.000 rpm', nf(t.rpm_high_pct), '%')}
     ${trow('Consumo estimado', l100 ? nf(l100, 1) : '—', 'l/100')}
     ${trow('Coste del trayecto', t.cost_eur != null ? nf(t.cost_eur, 2) : '—', '€', true)}
   </div>
   ${t.price_l ? `<p class="muted" style="padding:0 4px">Coste calculado con ${nf(t.price_l, 3)} €/L (tu último repostaje con precio, o la media de gasolineras cercanas).</p>` : ''}
-  <div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>`;
+  ${t.max_speed == null ? `<p class="muted" style="padding:0 4px">El coche no mandó datos durante este trayecto, solo al arrancar y al apagar: el mapa une la salida y la llegada en línea recta y no hay velocidad ni rpm.</p>` : `<div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>`}`;
 }
 
 function viewDatos() {
