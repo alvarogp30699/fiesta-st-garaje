@@ -28,6 +28,8 @@ body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);pos
 header{padding:16px 20px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 main{flex:1;min-height:0;overflow-y:auto;padding:0 16px 24px;display:flex;flex-direction:column;gap:10px;-webkit-overflow-scrolling:touch}
 main>*,body>header,body>nav,nav{flex-shrink:0}
+.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.35)}
+.vpshort nav{padding-bottom:8px}
 nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid var(--ln2);background:var(--bg);padding:6px 6px calc(8px + env(safe-area-inset-bottom))}
 nav button{background:none;border:0;color:var(--mu);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font:600 11px var(--mono);letter-spacing:.08em;min-height:52px;text-transform:uppercase}
 nav button.on{color:var(--ac)}
@@ -118,7 +120,8 @@ const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isN
 const C = { ac: '#ffd400', ok: '#2ee59d', wa: '#ffb21e', bad: '#ff4d3d', blue: '#4aa3ff', mu: '#7d858f', tx: '#f4f5f6' };
 const TABS = ['estado', 'viajes', 'motor', 'datos', 'taller'];
 const TITLES = { estado: ['Fiesta ST · Mk8', 'MI ST'], viajes: ['Últimos trayectos', 'VIAJES'], motor: ['Telemetría', 'MOTOR'], datos: ['Consumo, gasto y batería', 'DATOS'], taller: ['Mantenimiento', 'TALLER'], ajustes: ['Conexión y avisos', 'AJUSTES'] };
-const TILE = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+// CARTO ahora pide clave: mapa de OpenStreetMap (gratis, sin clave) oscurecido con un filtro.
+const TILE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
 let cfg = {};
@@ -325,7 +328,7 @@ function mapIn(id, host, opts = {}) {
     if (m) { try { m.map.remove(); } catch (e) {} }
     host.style.height = host.style.height || '220px';
     const map = L.map(host, { zoomControl: false, attributionControl: true, scrollWheelZoom: false, boxZoom: false, keyboard: false });
-    L.tileLayer(TILE, { attribution: '© OpenStreetMap · © CARTO', maxZoom: 19, subdomains: 'abcd' }).addTo(map);
+    L.tileLayer(TILE, { attribution: '© OpenStreetMap', maxZoom: 19, }).addTo(map);
     m = maps[id] = { el: host, map, layer: L.layerGroup().addTo(map), fit: null };
     const refit = () => { map.invalidateSize(); if (m.fit) m.fit(); };
     requestAnimationFrame(refit); setTimeout(refit, 300); setTimeout(refit, 900);
@@ -335,7 +338,7 @@ function mapIn(id, host, opts = {}) {
     const el = document.createElement('div');
     el.className = host.className;
     const map = L.map(el, { zoomControl: false, attributionControl: !opts.mini, dragging: !opts.mini, scrollWheelZoom: false, doubleClickZoom: !opts.mini, touchZoom: !opts.mini, boxZoom: false, keyboard: false });
-    L.tileLayer(TILE, { attribution: '© OpenStreetMap · © CARTO', maxZoom: 19, subdomains: 'abcd' }).addTo(map);
+    L.tileLayer(TILE, { attribution: '© OpenStreetMap', maxZoom: 19, }).addTo(map);
     m = maps[id] = { el, map, layer: L.layerGroup().addTo(map) };
   }
   host.replaceWith(m.el);
@@ -1093,8 +1096,11 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').ca
 // Alto real de la pantalla: iOS en modo app (icono) a veces informa de menos alto y deja la parte de abajo cortada.
 function fitScreen() {
   const portrait = window.matchMedia('(orientation: portrait)').matches;
-  let h = window.innerHeight;
-  if (standalone && screen.height) h = Math.max(h, portrait ? Math.max(screen.height, screen.width) : Math.min(screen.height, screen.width));
+  // iOS 26 en modo app solo pinta hasta innerHeight (el resto queda en negro): la app ocupa justo eso
+  // y, si sobra la franja de abajo, la barra no necesita el margen de la raya de inicio.
+  const h = window.innerHeight;
+  const full = portrait ? Math.max(screen.height, screen.width) : Math.min(screen.height, screen.width);
+  document.documentElement.classList.toggle('vpshort', standalone && full - h > 30);
   document.documentElement.style.setProperty('--app-h', h + 'px');
 }
 fitScreen();
