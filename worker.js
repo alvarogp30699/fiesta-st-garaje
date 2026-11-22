@@ -329,7 +329,7 @@ function mapTelemetry(data) {
     battery_soc: num(val('batteryStateOfCharge')),
     parking_brake: val('parkingBrakeStatus') ? /ON|ENGAGED/i.test(String(val('parkingBrakeStatus'))) : null,
     alarm: val('alarmStatus') || null,
-    speed_kmh: running ? Math.round(num(val('speed')) || 0) : 0,
+    speed_kmh: running ? Math.round((num(val('speed')) || 0) * 3.6) : 0, // Ford la manda en m/s
     gear: running ? (GEARS[String(gearRaw).toUpperCase()] ?? gearRaw ?? null) : null,
     rpm: running ? Math.round(num(val('engineSpeed')) || 0) : 0,
     throttle_pct: running ? Math.round(num(val('acceleratorPedalPosition')) || 0) : 0,
