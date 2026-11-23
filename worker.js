@@ -81,6 +81,9 @@ export default {
       if (m === 'GET' && p === '/api/battery') return json(await getBattery(env, clampInt(url.searchParams.get('days'), 3, 90, 14)));
       if (m === 'GET' && p === '/api/refuels') return json(await getRefuels(env));
       if (m === 'POST' && (mt = p.match(/^\/api\/refuels\/(\d+)$/))) return json(await updateRefuel(env, +mt[1], await req.json()));
+      if (m === 'POST' && p === '/api/pump/read') return json(await readPump(env, await req.json()));
+      if (m === 'POST' && p === '/api/pump/save') return json(await savePump(env, await req.json()));
+      if (m === 'GET' && (mt = p.match(/^\/api\/refuels\/(\d+)\/photo$/))) return pumpPhoto(env, +mt[1]);
       if (m === 'POST' && p === '/api/ford/connect') return json(await fordConnect(env, await req.json()));
       if (m === 'POST' && p === '/api/ford/refresh') return json(await fordRefresh(env));
       if (m === 'GET' && p === '/api/ford/status') return json(await fordStatus(env));
@@ -664,7 +667,20 @@ async function ingest(env, car, st) {
   }
   const nr = st.newRefuel;
   delete st.newRefuel;
-  if (nr && nr.lat != null) {
+  if (nr) {
+    // Foto del surtidor hecha antes de que el coche avisara del repostaje
+    const pend = await env.DB.prepare("SELECT v FROM kv WHERE k = 'pending_pump'").first();
+    if (pend) {
+      const pp = JSON.parse(pend.v);
+      if (nr.ts - pp.ts < 12 * 3600e3 && nr.ts - pp.ts > -3600e3) {
+        nr.pump = pp;
+        const ix = notes.findIndex(x => x.tag === 'refuel'); if (ix >= 0) notes.splice(ix, 1);
+        notes.push({ title: 'Repostaje apuntado', body: `${fmt(pp.litres, 2)} L a ${fmt(pp.price_l, 3)} €/L = ${fmt(pp.total, 2)} € (de la foto del surtidor).`, url: '#datos', tag: 'refuel' });
+        nr.done = true;
+      }
+    }
+  }
+  if (nr && !nr.done && nr.lat != null) {
     try {
       const type = await userFuelType(env);
       const { list } = await fuelStationsNear(env, nr.lat, nr.lon);
@@ -694,6 +710,10 @@ async function ingest(env, car, st) {
   }
   stmts.push(stateStmt(env.DB, st));
   await env.DB.batch(stmts);
+  if (nr && nr.pump) {
+    try { await applyPump(env, nr.ts, nr.pump); await env.DB.prepare("DELETE FROM kv WHERE k = 'pending_pump'").run(); }
+    catch (e) { console.error('foto surtidor', e); }
+  }
   for (const n of notes) await sendPushAll(env, n);
 }
 
@@ -784,6 +804,7 @@ async function prepare(env) {
   try { await db.prepare('ALTER TABLE trips ADD COLUMN track INTEGER DEFAULT 0').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE trips ADD COLUMN circuit TEXT').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE refuels ADD COLUMN price_l REAL').run(); } catch (e) { /* ya existe */ }
+  try { await db.prepare('ALTER TABLE refuels ADD COLUMN photo INTEGER').run(); } catch (e) { /* ya existe */ }
   const mc = await db.prepare('SELECT COUNT(*) AS n FROM maintenance').first();
   if (!mc.n) {
     await db.batch(DEFAULT_MAINT.map(([n, km, mo]) =>
@@ -911,9 +932,93 @@ async function updateRefuel(env, ts, body) {
   const price = body.price_total === null || body.price_total === '' ? null : Number(body.price_total);
   if (price !== null && !(price > 0 && price < 1000)) throw httpError('El precio no es válido', 400);
   const station = body.station ? String(body.station).slice(0, 80) : null;
-  const r = await env.DB.prepare('UPDATE refuels SET price_total = ?, station = ? WHERE ts = ?').bind(price, station, ts).run();
+  if (body.price_l != null && body.price_l !== '') {
+    const pl = Number(String(body.price_l).replace(',', '.'));
+    if (pl > 0.5 && pl < 4) await env.DB.prepare('UPDATE refuels SET price_l = ? WHERE ts = ?').bind(pl, ts).run();
+  }
+  const r = await env.DB.prepare('UPDATE refuels SET price_total = ?, station = ?, price_auto = 0 WHERE ts = ?').bind(price, station, ts).run();
   if (!r.meta.changes) throw httpError('Repostaje no encontrado', 404);
   return { ok: true };
+}
+
+// ---------- Foto del surtidor: la IA lee litros, €/L y total ----------
+const PUMP_PROMPT = 'Esta foto es la pantalla de un surtidor de gasolina en España. Lee los tres números: importe total en euros, litros y precio por litro. ' +
+  'Responde SOLO con JSON así: {"total": 58.18, "litres": 41.0, "price_l": 1.419}. Usa punto decimal. Si no ves un número, pon null.';
+
+async function readPump(env, body) {
+  const img = String(body.image || '');
+  if (!/^data:image\/(jpeg|png|webp);base64,/.test(img) || img.length > 4e6) throw httpError('La foto no es válida', 400);
+  if (!env.AI) throw httpError('El lector de fotos no está activo', 503);
+  let txt = null;
+  for (const model of ['@cf/meta/llama-4-scout-17b-16e-instruct', '@cf/google/gemma-4-26b-a4b-it']) {
+    try {
+      const out = await env.AI.run(model, {
+        messages: [{ role: 'user', content: [{ type: 'text', text: PUMP_PROMPT }, { type: 'image_url', image_url: { url: img } }] }],
+        max_tokens: 300, temperature: 0
+      });
+      const r = out?.response ?? out?.choices?.[0]?.message?.content ?? out;
+      txt = typeof r === 'string' ? r : JSON.stringify(r);
+      if (/\d/.test(txt)) break;
+    } catch (e) { console.error('ai ' + model, e); }
+  }
+  if (!txt) throw httpError('No he podido leer la foto, prueba otra vez', 502);
+  const m = txt.match(/\{[^{}]*\}/);
+  let v = {};
+  try { v = JSON.parse(m ? m[0] : '{}'); } catch (e) {}
+  const n = x => { const k = Number(String(x ?? '').replace(',', '.')); return k > 0 ? k : null; };
+  let total = n(v.total), litres = n(v.litres), price_l = n(v.price_l);
+  // Completa el que falte y corrige si uno no cuadra con los otros dos
+  if (!total && litres && price_l) total = round(litres * price_l, 2);
+  if (!litres && total && price_l) litres = round(total / price_l, 2);
+  if (!price_l && total && litres) price_l = round(total / litres, 3);
+  if (price_l && (price_l < 0.8 || price_l > 3)) price_l = total && litres ? round(total / litres, 3) : null;
+  if (litres && litres > TANK_L + 2) litres = null;
+  const ok = total && litres && price_l && Math.abs(litres * price_l - total) <= Math.max(0.15, total * 0.01);
+  return { total, litres, price_l, ok: !!ok };
+}
+
+async function applyPump(env, ts, v) {
+  if (v.photo && env.BACKUPS) {
+    await env.BACKUPS.put('foto-' + ts, v.photo, { expirationTtl: 400 * 86400 });
+    if (v.photoKey) await env.BACKUPS.delete(v.photoKey);
+  } else if (v.photoKey && env.BACKUPS) {
+    const ph = await env.BACKUPS.get(v.photoKey);
+    if (ph) { await env.BACKUPS.put('foto-' + ts, ph, { expirationTtl: 400 * 86400 }); await env.BACKUPS.delete(v.photoKey); }
+  }
+  const hasPhoto = !!(v.photo || v.photoKey);
+  await updateRefuel(env, ts, { litres: v.litres, price_total: v.total, price_l: v.price_l, station: v.station || await favName(env) });
+  if (hasPhoto) await env.DB.prepare('UPDATE refuels SET photo = 1 WHERE ts = ?').bind(ts).run();
+}
+
+// Guarda lo leído: en el repostaje indicado, en el último si es de hace menos de 12 h, o pendiente hasta que el coche lo detecte
+async function savePump(env, body) {
+  const v = { litres: Number(body.litres), total: Number(body.total), price_l: Number(body.price_l), station: body.station || null };
+  if (!(v.litres > 1 && v.litres <= TANK_L + 2) || !(v.total > 0 && v.total < 300) || !(v.price_l > 0.5 && v.price_l < 4)) throw httpError('Revisa los números', 400);
+  const photo = /^data:image\/jpeg;base64,/.test(String(body.image || '')) && body.image.length < 4e6 ? body.image : null;
+  let ts = Number(body.ts) || null;
+  if (!ts) {
+    const last = await env.DB.prepare('SELECT ts FROM refuels ORDER BY ts DESC LIMIT 1').first();
+    if (last && Date.now() - last.ts < 12 * 3600e3) ts = last.ts;
+  }
+  if (ts) { await applyPump(env, ts, { ...v, photo }); return { ok: true, ts }; }
+  const now = Date.now();
+  let photoKey = null;
+  if (photo && env.BACKUPS) { photoKey = 'foto-pend-' + now; await env.BACKUPS.put(photoKey, photo, { expirationTtl: 3 * 86400 }); }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('pending_pump', ?)").bind(JSON.stringify({ ...v, ts: now, photoKey })).run();
+  return { ok: true, pending: true };
+}
+
+async function favName(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_station'").first();
+  try { return row ? JSON.parse(row.v).name || null : null; } catch (e) { return null; }
+}
+
+async function pumpPhoto(env, ts) {
+  const ph = env.BACKUPS && await env.BACKUPS.get('foto-' + ts);
+  if (!ph) throw httpError('Sin foto', 404);
+  const [, b64] = ph.split(',');
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return new Response(bin, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400', 'access-control-allow-origin': '*' } });
 }
 
 async function listTrips(env, limit) {

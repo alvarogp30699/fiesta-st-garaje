@@ -654,7 +654,7 @@ function viewDatos() {
   const monthName = now.toLocaleDateString('es-ES', { month: 'long' });
   const rows = refuels.refuels.slice(0, 10).map(r => `
     <button class="li" data-refuel="${r.ts}" style="grid-template-columns:1fr auto">
-      <span class="col" style="gap:2px"><span style="font-size:15px;font-weight:600">${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}${r.station ? ' · ' + esc(r.station) : ''}</span>
+      <span class="col" style="gap:2px"><span style="font-size:15px;font-weight:600">${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}${r.station ? ' · ' + esc(r.station) : ''}${r.photo ? ' 📸' : ''}</span>
       <span style="font-size:12px;color:#7d858f">${nf(r.odometer)} km${r.l100 ? ' · ' + nf(r.l100, 1) + ' l/100' : ''}</span></span>
       <span class="col" style="gap:2px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${r.litres != null ? nf(r.litres, 1) + ' L' : 'Lleno'}</span>
       <span style="font-size:12px;color:${r.price_total || r.price_l ? C.mu : C.ac}">${r.price_total ? nf(r.price_total, 2) + ' €' + (r.price_auto ? ' · estimado' : ' · ' + nf(r.price_l, 3) + ' €/L') : r.price_l ? nf(r.price_l, 3) + ' €/L' : 'Añadir precio'}</span></span>
@@ -700,6 +700,7 @@ function viewDatos() {
   ${expensesCard()}
   <div class="pn" style="padding:4px 16px">
     <div class="row" style="padding:12px 0"><span class="k">Repostajes</span><button class="m" id="copyCsv" style="background:none;border:0;color:${C.ac};font-size:12px;font-weight:600;letter-spacing:.08em;min-height:36px">COPIAR CSV</button></div>
+    <button class="btn sec" data-pump="" style="margin-bottom:8px">📸 Foto del surtidor</button>
     ${rows}
   </div>`;
 }
@@ -847,12 +848,31 @@ function sheetHtml() {
     const r = sheet.item;
     return `<form class="sheet" id="sheetForm">
       <span class="k">Repostaje del ${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</span>
+      ${r.photo ? `<img id="sPhoto" alt="Foto del surtidor" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;background:#15181c;min-height:120px">` : ''}
+      <button type="button" class="btn sec" data-pump="${r.ts}">📸 ${r.photo ? 'Cambiar foto del surtidor' : 'Rellenar con foto del surtidor'}</button>
       <label for="sLitres">Litros del tique<input id="sLitres" inputmode="decimal" value="${r.litres != null ? nf(r.litres, 2) : ''}" placeholder="41,00"></label>
       <p class="muted">Pon los litros reales del surtidor: si llenaste el depósito, con ellos se corrige el cálculo de consumo de los trayectos.</p>
       ${r.price_auto ? '<p class="muted">Precio calculado con la gasolinera más cercana. Corrígelo con el del tique si quieres.</p>' : ''}
       <label for="sPrice">Precio total (€)<input id="sPrice" inputmode="decimal" value="${r.price_total != null ? nf(r.price_total, 2) : ''}" placeholder="52,30"></label>
       <label for="sStation">Gasolinera<input id="sStation" value="${esc(r.station || '')}" placeholder="Repsol Salou"></label>
       <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+    </form>`;
+  }
+  if (sheet.type === 'pump') {
+    const v = sheet.read || {};
+    const target = sheet.ts ? refuels.refuels.find(r => r.ts === sheet.ts) : null;
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">Foto del surtidor</span>
+      <img src="${sheet.img}" alt="Foto del surtidor" style="width:100%;max-height:200px;object-fit:cover;border-radius:10px">
+      ${sheet.reading ? '<p class="muted">Leyendo los números… (unos segundos)</p>' : `
+      <p class="muted" style="color:${v.ok ? C.ok : C.ac}">${v.ok ? '✓ Leído y cuadra: litros × precio = importe. Revisa y guarda.' : v.error ? esc(v.error) + ' Escríbelos a mano.' : 'No he podido leerlo todo bien: revisa los números antes de guardar.'}</p>
+      <div class="g3" style="gap:8px">
+        <label for="pTotal">Importe €<input id="pTotal" inputmode="decimal" value="${v.total != null ? nf(v.total, 2) : ''}" placeholder="58,18"></label>
+        <label for="pLitres">Litros<input id="pLitres" inputmode="decimal" value="${v.litres != null ? nf(v.litres, 2) : ''}" placeholder="41,00"></label>
+        <label for="pPl">€/L<input id="pPl" inputmode="decimal" value="${v.price_l != null ? nf(v.price_l, 3) : ''}" placeholder="1,419"></label>
+      </div>
+      <p class="muted">${target ? 'Se guarda en el repostaje del ' + new Date(target.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }) + '.' : 'Se guarda en el repostaje de hoy. Si el coche aún no lo ha detectado, lo apunto en cuanto arranques.'}</p>`}
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit" ${sheet.reading ? 'disabled' : ''}>Guardar</button></div>
     </form>`;
   }
   if (sheet.type === 'parking') {
@@ -1163,8 +1183,46 @@ function bindSettings() {
   };
 }
 
+// Foto del surtidor: se reduce en el móvil y la IA del servidor lee importe, litros y €/L
+function pickPump(ts) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    try {
+      const img = await shrinkImage(f, 1400);
+      sheet = { type: 'pump', ts: ts || null, img, reading: true }; render();
+      let read;
+      try { read = await api('/api/pump/read', { method: 'POST', body: JSON.stringify({ image: img }) }); }
+      catch (e) { read = { error: e.message }; }
+      if (sheet && sheet.type === 'pump' && sheet.img === img) { sheet.reading = false; sheet.read = read; render(); }
+    } catch (e) { error = 'No he podido abrir la foto'; render(); }
+  };
+  inp.click();
+}
+function shrinkImage(file, max) {
+  return new Promise((ok, ko) => {
+    const u = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, max / Math.max(im.width, im.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(im.width * k); cv.height = Math.round(im.height * k);
+      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height); URL.revokeObjectURL(u);
+      ok(cv.toDataURL('image/jpeg', 0.82));
+    };
+    im.onerror = ko; im.src = u;
+  });
+}
+async function loadPumpPhoto(ts) {
+  const el = $('#sPhoto'); if (!el) return;
+  try {
+    const r = await fetch(cfg.url.replace(/\/+$/, '') + '/api/refuels/' + ts + '/photo', { headers: { 'x-app-key': cfg.key } });
+    if (r.ok) el.src = URL.createObjectURL(await r.blob()); else el.remove();
+  } catch (e) { el.remove(); }
+}
+
 function bindSheet() {
+  document.querySelectorAll('[data-pump]').forEach(b => b.onclick = () => pickPump(Number(b.dataset.pump) || null));
   const bg = $('#sheetBg'); if (!bg) return;
+  if (sheet && sheet.type === 'refuel' && sheet.item.photo) loadPumpPhoto(sheet.item.ts);
   bg.onclick = e => { if (e.target === bg) closeSheet(); };
   bg.querySelectorAll('[data-close]').forEach(b => b.onclick = closeSheet);
   const form = $('#sheetForm');
@@ -1187,6 +1245,10 @@ function bindSheet() {
       } else if (sheet.type === 'parking') {
         parking = await api('/api/parking', { method: 'POST', body: JSON.stringify({ note: $('#pNote').value.trim() }) });
         sheet = null; flash('Nota guardada');
+      } else if (sheet.type === 'pump') {
+        const r = await api('/api/pump/save', { method: 'POST', body: JSON.stringify({ ts: sheet.ts, total: num($('#pTotal').value), litres: num($('#pLitres').value), price_l: num($('#pPl').value), image: sheet.img }) });
+        refuels = await api('/api/refuels'); loaded.datos = Date.now();
+        sheet = null; flash(r.pending ? 'Apuntado: lo pongo en el repostaje cuando el coche lo detecte' : 'Repostaje guardado con la foto');
       } else if (sheet.type === 'refuel') {
         const price = $('#sPrice').value.trim();
         await api('/api/refuels/' + sheet.item.ts, { method: 'POST', body: JSON.stringify({ price_total: price ? num(price) : null, station: $('#sStation').value.trim(), litres: $('#sLitres').value.trim() || null }) });

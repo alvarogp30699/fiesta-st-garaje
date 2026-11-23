@@ -11,6 +11,7 @@
       "database_id": "51cedab1-7b9c-41ba-a76d-f67a9b309ff7"
     }
   ],
+  "ai": { "binding": "AI" },
   "kv_namespaces": [
     { "binding": "BACKUPS", "id": "3766d6baa89148ca8c8230819aa10fe5" }
   ],
