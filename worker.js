@@ -591,8 +591,12 @@ function processCar(db, st, c, opts = {}) {
   } else if (st.trip) {
     const t = st.trip;
     const endOdo = c.odometer_km ?? t.end_odo;
-    const km = round(endOdo - t.start_odo, 1);
-    if (km >= 0.3) {
+    // El cuentakilómetros va en km enteros: en trayectos cortos se usa la distancia GPS entre los puntos
+    const gp = [t.start, ...t.pts.map(p => [p[0], p[1]]), c.location ? [c.location.lat, c.location.lon] : null].filter(Boolean);
+    let gps = 0; for (let i = 1; i < gp.length; i++) gps += distKm(gp[i - 1][0], gp[i - 1][1], gp[i][0], gp[i][1]);
+    const odoKm = endOdo - t.start_odo;
+    const km = round(odoKm >= 2 ? odoKm : Math.max(odoKm, gps * 1.2), 1); // ×1,2: las calles no van en línea recta
+    if (km >= 0.15) {
       if (c.data_ts && c.data_ts > t.start_ts) t.end_ts = c.data_ts; // hora real a la que se apagó
       const dur = Math.max(60, Math.round((t.end_ts - t.start_ts) / 1000));
       const noLive = !t.moving; // el coche no mandó nada en marcha: sin velocidad ni rpm reales
