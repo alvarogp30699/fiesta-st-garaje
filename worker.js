@@ -1105,8 +1105,11 @@ async function priceHistBackfill(env) {
   const have = new Set(hist.filter(h => h.id == null || h.id === f.id).map(h => h.d));
   const tried = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_hist_tried'").first();
   const skip = new Set(tried ? JSON.parse(tried.v) : []);
+  const waitRow = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_hist_wait'").first();
+  const waiting = waitRow && Date.now() - Number(waitRow.v) < 3600e3;
   let day = null;
   for (let i = 1; i <= 90; i++) {
+    if (waiting && i <= 2) continue;
     const d = new Date(Date.now() + 3600e3 - i * 86400e3).toISOString().slice(0, 10);
     if (!have.has(d) && !skip.has(f.id + d)) { day = d; break; }
   }
@@ -1126,6 +1129,8 @@ async function priceHistBackfill(env) {
     }
   } catch (e) { /* se reintenta otro día */ }
   if (p95 == null && p98 == null) {
+    // Los últimos 2 días puede que aún no estén publicados: no se marcan, se reintentan otro rato
+    if (Date.now() - Date.parse(day + 'T00:00:00Z') < 3 * 86400e3) { await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_hist_wait', ?)").bind(String(Date.now())).run(); return; }
     skip.add(f.id + day);
     await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_hist_tried', ?)").bind(JSON.stringify([...skip].slice(-200))).run();
     return;
