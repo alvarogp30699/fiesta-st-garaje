@@ -100,6 +100,9 @@ export default {
       if (m === 'POST' && p === '/api/deadlines') return json(await saveDeadline(env, await req.json()));
       if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
+      if (m === 'GET' && p === '/api/siri') return new Response(await siriText(env), { headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } });
+      if (m === 'GET' && p === '/api/fuel/advice') return json(await refuelAdvice(env));
+      if (m === 'GET' && p === '/api/month') return json(await monthSummary(env, url.searchParams.get('m')));
       if (m === 'GET' && p === '/api/backups') return json(await listBackups(env));
       if (m === 'GET' && p.startsWith('/api/backups/')) return json(await getBackup(env, decodeURIComponent(p.slice(13))));
       if (m === 'GET' && p === '/api/expenses') return json(await listExpenses(env, url.searchParams.get('year')));
@@ -165,6 +168,7 @@ export default {
     await daily(env, event.scheduledTime);
     try { await geoBackfill(env); } catch (e) { console.error('geo', e); }
     try { await pathBackfill(env); } catch (e) { console.error('ruta', e); }
+    try { await priceHistBackfill(env); } catch (e) { console.error('histórico precios', e); }
     try { await weeklyBackup(env, event.scheduledTime); } catch (e) { console.error('copia', e); }
   }
 };
@@ -711,6 +715,8 @@ async function ingest(env, car, st) {
         const type = await userFuelType(env);
         const fav = await favStation(env, type, car.location && car.location.lat, car.location && car.location.lon);
         if (fav && !fav.missing && fav.price) body += ` ${fav.name} ${titleCase(fav.town)} hoy a ${fmt(fav.price, 3)} €/L${fav.km != null ? ` (a ${fmt(fav.km, 1)} km)` : ''}: lleno por unos ${fmt(fav.price * TANK_L * (1 - car.fuel_pct / 100), 0)} €.`;
+        const adv = await refuelAdvice(env);
+        if (adv && adv.short) body += ' ' + adv.short;
       } catch (e) { /* sin precio */ }
       notes.push({ title: '⛽ Toca repostar', body, url: '#datos', tag: 'fuel_low' });
     }
@@ -735,22 +741,33 @@ async function daily(env, when) {
   if (row && row.v === day) return;
   await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('daily', ?)").bind(day).run();
 
-  const { items } = await listMaint(env);
-  const due = items.filter(i => i.status === 'vencido' || i.status === 'pronto');
-  if (due.length) {
-    await sendPushAll(env, {
-      title: 'Mantenimiento', url: '#taller', tag: 'maint',
-      body: due.map(i => `${i.name}: ${i.summary}`).join(' · ')
-    });
-  }
+  try {
+    const { items } = await listMaint(env);
+    const due = items.filter(i => i.status === 'vencido' || i.status === 'pronto');
+    if (due.length) {
+      await sendPushAll(env, {
+        title: 'Mantenimiento', url: '#taller', tag: 'maint',
+        body: due.map(i => `${i.name}: ${i.summary}`).join(' · ')
+      });
+    }
+  } catch (e) { console.error('mantenimiento', e); }
   if (local.getUTCDay() === 1) {
     try { await sendPushAll(env, await weeklySummary(env)); } catch (e) { console.error('semanal', e); }
   }
+  if (local.getUTCDate() === 1) {
+    try {
+      const prev = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+      const ms = await monthSummary(env, prev);
+      if (ms.trips) await sendPushAll(env, { title: '📊 Resumen de ' + ms.label, body: ms.text, url: '#viajes', tag: 'month' });
+    } catch (e) { console.error('mensual', e); }
+  }
   // Fechas (ITV, seguro, impuesto): a 30, 7 y 1 días y el mismo día
-  const { items: dl } = await listDeadlines(env);
-  const hits = dl.filter(d => d.days != null && [30, 7, 1, 0].includes(d.days));
-  if (hits.length) await sendPushAll(env, { title: 'Fechas del coche', url: '#taller', tag: 'deadline',
-    body: hits.map(d => `${d.name}: ${d.days === 0 ? 'vence hoy' : d.days === 1 ? 'vence mañana' : 'vence en ' + d.days + ' días'}`).join(' · ') });
+  try {
+    const { items: dl } = await listDeadlines(env);
+    const hits = dl.filter(d => d.days != null && [30, 7, 1, 0].includes(d.days));
+    if (hits.length) await sendPushAll(env, { title: 'Fechas del coche', url: '#taller', tag: 'deadline',
+      body: hits.map(d => `${d.name}: ${d.days === 0 ? 'vence hoy' : d.days === 1 ? 'vence mañana' : 'vence en ' + d.days + ' días'}`).join(' · ') });
+  } catch (e) { console.error('fechas', e); }
   // Coche parado varios días con la batería baja
   const st = await loadState(env);
   const last = await env.DB.prepare('SELECT battery_v AS battery FROM snapshots ORDER BY ts DESC LIMIT 1').first();
@@ -1048,6 +1065,170 @@ async function pumpPhoto(env, ts) {
   return new Response(bin, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400', 'access-control-allow-origin': '*' } });
 }
 
+// ---------- Siri: "¿Cómo está el coche?" ----------
+async function siriText(env) {
+  const c = await getLive(env);
+  const places = await getPlaces(env);
+  const running = c.ignition && c.ignition !== 'off';
+  const out = [];
+  if (running) out.push(`El coche está en marcha${c.speed_kmh ? ' a ' + c.speed_kmh + ' kilómetros por hora' : ''}.`);
+  else {
+    const where = c.location ? placeAt(c.location.lat, c.location.lon, places) || await geoName(env, c.location.lat, c.location.lon) : null;
+    const open = [...(c.doors_open || []), ...(c.windows_open || [])];
+    out.push(c.locked === false ? `Ojo: el coche está abierto${where ? ' en ' + where : ''}.` : `El coche está cerrado${where ? ' en ' + where : ''}.`);
+    if (open.length) out.push('Abierto: ' + open.join(', ') + '.');
+  }
+  if (c.fuel_pct != null) out.push(`Gasolina al ${Math.round(c.fuel_pct)} por ciento${c.range_km ? ', unos ' + c.range_km + ' kilómetros' : ''}.`);
+  if (c.tyres) {
+    const low = c.tyres_low || [];
+    out.push(low.length ? `Revisa la presión: ${low.map(k => ({ fl: 'delantera izquierda', fr: 'delantera derecha', rl: 'trasera izquierda', rr: 'trasera derecha' })[k] || k).join(' y ')}.` : 'Las ruedas están bien.');
+  }
+  if (!running) {
+    if (c.battery_v != null) out.push(c.battery_v >= 12.4 ? 'Batería correcta.' : `Batería baja, a ${String(c.battery_v).replace('.', ',')} voltios.`);
+    else if (c.battery_soc != null) out.push(c.battery_soc >= 70 ? 'Batería correcta.' : `Batería al ${c.battery_soc} por ciento.`);
+  }
+  if (c.fuel_pct != null && c.fuel_pct < 30) {
+    const a = await refuelAdvice(env).catch(() => null);
+    if (a && a.short) out.push(a.short);
+  }
+  return out.join(' ');
+}
+
+// ---------- Histórico de precios de tu gasolinera (Ministerio, día a día) y consejo de repostaje ----------
+const FUEL_HIST_API = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestresHist/FiltroProvincia/';
+async function priceHistBackfill(env) {
+  const fr = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_station'").first();
+  if (!fr) return;
+  const f = JSON.parse(fr.v);
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_prices'").first();
+  const hist = row ? JSON.parse(row.v) : [];
+  const have = new Set(hist.filter(h => h.id == null || h.id === f.id).map(h => h.d));
+  const tried = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_hist_tried'").first();
+  const skip = new Set(tried ? JSON.parse(tried.v) : []);
+  let day = null;
+  for (let i = 1; i <= 90; i++) {
+    const d = new Date(Date.now() + 3600e3 - i * 86400e3).toISOString().slice(0, 10);
+    if (!have.has(d) && !skip.has(f.id + d)) { day = d; break; }
+  }
+  if (!day) return;
+  const [y, mo, dd] = day.split('-');
+  let p95 = null, p98 = null, avg95 = null;
+  try {
+    const r = await fetch(FUEL_HIST_API + `${dd}-${mo}-${y}/${f.prov}`, { headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (FiestaSTGaraje)' } });
+    if (r.ok) {
+      const j = await r.json();
+      const n = v => { const x = parseFloat(String(v || '').replace(',', '.')); return isNaN(x) ? null : x; };
+      const L = j.ListaEESSPrecio || [];
+      const s = L.find(x => x.IDEESS === f.id);
+      if (s) { p95 = n(s[FUEL_FIELDS['95']]); p98 = n(s[FUEL_FIELDS['98']]); }
+      const all = L.map(x => n(x[FUEL_FIELDS['95']])).filter(Boolean).sort((a, b) => a - b);
+      if (all.length) avg95 = all[Math.floor(all.length / 2)];
+    }
+  } catch (e) { /* se reintenta otro día */ }
+  if (p95 == null && p98 == null) {
+    skip.add(f.id + day);
+    await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_hist_tried', ?)").bind(JSON.stringify([...skip].slice(-200))).run();
+    return;
+  }
+  hist.push({ d: day, id: f.id, p95, p98, med95: avg95 });
+  hist.sort((a, b) => a.d < b.d ? -1 : 1);
+  while (hist.length > 180) hist.shift();
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_prices', ?)").bind(JSON.stringify(hist)).run();
+}
+
+const DIAS = ['domingos', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'];
+async function refuelAdvice(env) {
+  const type = await userFuelType(env);
+  const fav = await favStation(env, type).catch(() => null);
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_prices'").first();
+  const hist = (row ? JSON.parse(row.v) : []).filter(h => h['p' + type] != null && (!fav || h.id == null || h.id === fav.id));
+  const key = 'p' + type;
+  const today = fav && !fav.missing ? fav.price : (hist.length ? hist[hist.length - 1][key] : null);
+  if (today == null || hist.length < 10) return { ready: false, days: hist.length, today, station: fav ? `${fav.name} ${titleCase(fav.town)}` : null };
+  const last30 = hist.slice(-30).map(h => h[key]);
+  const mean = last30.reduce((a, b) => a + b, 0) / last30.length;
+  const min = Math.min(...last30), max = Math.max(...last30);
+  // Patrón por día de la semana: diferencia con la media de su semana (quita la tendencia)
+  const dev = Array.from({ length: 7 }, () => []);
+  hist.forEach((h, i) => {
+    const win = hist.slice(Math.max(0, i - 3), i + 4).map(x => x[key]);
+    const m = win.reduce((a, b) => a + b, 0) / win.length;
+    dev[new Date(h.d + 'T12:00:00Z').getUTCDay()].push(h[key] - m);
+  });
+  const wd = dev.map((a, i) => ({ i, n: a.length, v: a.length ? a.reduce((x, y) => x + y, 0) / a.length : null })).filter(x => x.n >= 3);
+  const best = wd.length >= 5 ? wd.reduce((a, b) => (b.v < a.v ? b : a)) : null;
+  const worst = wd.length >= 5 ? wd.reduce((a, b) => (b.v > a.v ? b : a)) : null;
+  const pattern = best && worst && worst.v - best.v >= 0.006 ? { best: DIAS[best.i], best_cts: round(-best.v * 100, 1), worst: DIAS[worst.i], worst_cts: round(worst.v * 100, 1) } : null;
+  // Tendencia: últimos 7 días
+  const l7 = hist.slice(-7).map(h => h[key]);
+  const trend = l7.length >= 5 ? round((l7[l7.length - 1] - l7[0]) * 100, 1) : null;
+  const diff = round((today - mean) * 100, 1); // céntimos sobre la media
+  const todayIdx = new Date(Date.now() + 3600e3).getUTCDay();
+  let verdict, short;
+  if (today <= min + 0.002 || diff <= -1) { verdict = 'llena'; short = `Hoy está ${fmt(-diff, 1)} céntimos por debajo de su media: buen día para llenar.`; }
+  else if (diff >= 1.5) { verdict = 'espera'; short = `Hoy está ${fmt(diff, 1)} céntimos por encima de su media${pattern ? `; suele estar más barata los ${pattern.best}` : ''}. Si puedes, pon lo justo y llena luego.`; }
+  else { verdict = 'normal'; short = pattern && pattern.best !== DIAS[todayIdx] ? `Precio normal hoy; los ${pattern.best} suele estar ${fmt(pattern.best_cts, 1)} céntimos más barata.` : 'Precio normal hoy.'; }
+  const pts = hist.length;
+  return { ready: true, today, mean: round(mean, 3), min, max, diff_cts: diff, trend_cts: trend, pattern, verdict, short, days: pts,
+    station: fav ? `${fav.name} ${titleCase(fav.town)}` : null, fill_eur: round(today * TANK_L, 0) };
+}
+
+// ---------- Resumen de un mes ----------
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+async function monthStats(env, ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const a = Date.UTC(y, m - 1, 1) - 3600e3, b = Date.UTC(y, m, 1) - 3600e3;
+  const t = await env.DB.prepare('SELECT COUNT(*) n, SUM(km) km, SUM(duration_s) s, SUM(fuel_used_l) l, MAX(max_speed) vmax, SUM(CASE WHEN track = 1 THEN 1 ELSE 0 END) track FROM trips WHERE start_ts >= ? AND start_ts < ?').bind(a, b).first();
+  const r = await env.DB.prepare('SELECT COUNT(*) n, SUM(litres) l, SUM(price_total) eur FROM refuels WHERE ts >= ? AND ts < ?').bind(a, b).first();
+  const e = (await rawExpenses(env)).filter(x => x.date && x.date.slice(0, 7) === ym).reduce((s, x) => s + (x.eur || 0), 0);
+  return { ym, label: MESES[m - 1] + ' ' + y, trips: t.n || 0, km: round(t.km || 0, 0), hours: round((t.s || 0) / 3600, 1), fuel_l: round(t.l || 0, 1),
+    l100: t.km > 50 ? round(t.l / t.km * 100, 1) : null, vmax: t.vmax, track: t.track || 0, refuels: r.n || 0, refuel_l: round(r.l || 0, 1), fuel_eur: round(r.eur || 0, 2), other_eur: round(e, 2) };
+}
+async function monthSummary(env, ym) {
+  const now = new Date(Date.now() + 3600e3);
+  ym = /^\d{4}-\d{2}$/.test(ym || '') ? ym : now.toISOString().slice(0, 7);
+  const [y, m] = ym.split('-').map(Number);
+  const prevYm = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+  const cur = await monthStats(env, ym), prev = await monthStats(env, prevYm);
+  // Ida y vuelta al trabajo este mes
+  const places = await getPlaces(env);
+  const [ta, tb] = [Date.UTC(y, m - 1, 1) - 3600e3, Date.UTC(y, m, 1) - 3600e3];
+  const { results } = await env.DB.prepare('SELECT points, km, fuel_used_l FROM trips WHERE start_ts >= ? AND start_ts < ?').bind(ta, tb).all();
+  const price = await priceFinder(env);
+  let wN = 0, wKm = 0, wL = 0;
+  for (const t of results) {
+    const pl = tripPlaces(JSON.parse(t.points || '[]'), places);
+    if ([pl.from, pl.to].some(x => /portaventura|trabajo/i.test(x || ''))) { wN++; wKm += t.km || 0; wL += t.fuel_used_l || 0; }
+  }
+  const work = wN ? { trips: wN, km: round(wKm, 0), eur: round(wL * price(Date.now()), 2) } : null;
+  const pct = (a, b) => b ? Math.round((a - b) / b * 100) : null;
+  const parts = [`${fmt(cur.km)} km en ${cur.trips} trayectos`];
+  if (cur.l100) parts.push(`${fmt(cur.l100, 1)} l/100`);
+  if (cur.fuel_eur) parts.push(`${fmt(cur.fuel_eur, 2)} € en gasolina`);
+  if (work) parts.push(`al trabajo ${work.trips} viajes (${fmt(work.eur, 2)} €)`);
+  if (prev.km) { const d = pct(cur.km, prev.km); parts.push(`${d >= 0 ? '+' : ''}${d} % km que en ${prev.label.split(' ')[0]}`); }
+  return { ...cur, prev, work, km_vs_prev_pct: pct(cur.km, prev.km), text: parts.join(' · ') + '.' };
+}
+
+// ---------- Comparar con trayectos iguales (misma salida y llegada, ±400 m) ----------
+async function sameTrips(env, t, pts) {
+  if (!pts.length || t.track) return null;
+  const a = pts[0], b = pts[pts.length - 1];
+  if (distKm(a[0], a[1], b[0], b[1]) < 1) return null;
+  const { results } = await env.DB.prepare('SELECT id, start_ts, km, duration_s, fuel_used_l, start_lat, start_lon, end_lat, end_lon FROM trips WHERE id != ? AND COALESCE(track, 0) = 0 AND start_lat IS NOT NULL AND end_lat IS NOT NULL').bind(t.id).all();
+  const same = results.filter(o => distKm(a[0], a[1], o.start_lat, o.start_lon) < 0.4 && distKm(b[0], b[1], o.end_lat, o.end_lon) < 0.4 && o.km > t.km * 0.7 && o.km < t.km * 1.4);
+  if (!same.length) return null;
+  const all = [...same, t];
+  const avgS = same.reduce((s, o) => s + o.duration_s, 0) / same.length;
+  const best = all.reduce((x, y) => (y.duration_s < x.duration_s ? y : x));
+  const lOk = same.filter(o => o.fuel_used_l && o.km >= 5);
+  const avgL = lOk.length ? lOk.reduce((s, o) => s + o.fuel_used_l / o.km * 100, 0) / lOk.length : null;
+  const rank = all.filter(o => o.duration_s < t.duration_s).length + 1;
+  return { n: same.length, avg_s: Math.round(avgS), diff_s: Math.round(t.duration_s - avgS), best_s: best.duration_s, best_id: best.id, best_ts: best.start_ts,
+    is_best: best.id === t.id, rank, of: all.length, avg_l100: avgL != null ? round(avgL, 1) : null,
+    l100: t.fuel_used_l && t.km >= 5 ? round(t.fuel_used_l / t.km * 100, 1) : null };
+}
+
 async function listTrips(env, limit) {
   const { results } = await env.DB.prepare(
     `SELECT id, start_ts, end_ts, km, duration_s, avg_speed, max_speed, max_rpm, max_oil, avg_throttle, rpm_high_pct, fuel_used_l,
@@ -1101,7 +1282,8 @@ async function getTrip(env, id) {
   }
   // Con pocas lecturas la punta real se pierde: si sale menor que la media, no es fiable
   if (t.max_speed != null && t.avg_speed && t.max_speed < t.avg_speed) { t.max_speed_low = true; }
-  return { ...t, ...tp, points: pts0, path, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+  const same = await sameTrips(env, t, pts0).catch(() => null);
+  return { ...t, ...tp, points: pts0, path, same, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
 }
 
 // Ruta por carretera: el coche solo manda un punto cada ~2 min, así que se calcula el camino real
@@ -1608,6 +1790,14 @@ async function getTyreSet(env) {
   if (t.mounted_date) Object.assign(out, (({ km, days }) => ({ track_km: round(km, 1), track_days: days }))(await trackSince(env, t.mounted_date)));
   const base = t.rotated_km ?? t.mounted_km;
   if (base != null && odo != null) out.rotate_in_km = Math.round(base + 10000 - odo);
+  // Vida orientativa de un semi-slick de calle como las SuperSport: ~20.000 km en uso normal; cada km de circuito gasta como ~8 de carretera
+  out.life_km = /supersport|cup|trofeo|r-?s|semi/i.test(t.model || '') ? 20000 : 35000;
+  if (out.km != null) {
+    const used = out.km + (out.track_km || 0) * 7;
+    out.left_km = Math.max(0, Math.round(out.life_km - used));
+    const kpd = await kmPerDay(env);
+    out.eta = kpd > 1 ? etaDate(out.left_km / kpd) : null;
+  }
   return out;
 }
 
@@ -2019,8 +2209,28 @@ function maintStatus(i, odo, now) {
   return out;
 }
 
+// km al día: media de los últimos 30 días (mínimo 7 días de cuenta para no exagerar con un viaje largo)
+async function kmPerDay(env) {
+  const now = Date.now();
+  const r = await env.DB.prepare('SELECT MIN(ts) t0, MIN(odometer) o0, MAX(odometer) o1 FROM snapshots WHERE ts > ? AND odometer IS NOT NULL').bind(now - 30 * 86400e3).first();
+  if (!r || r.o0 == null) return null;
+  const days = Math.max(7, (now - r.t0) / 86400e3);
+  return round((r.o1 - r.o0) / days, 1);
+}
+// Vida del aceite: km por cada 1 % que baja, con los cambios de % vistos (hacen falta al menos 2)
+async function oilRate(env) {
+  const { results } = await env.DB.prepare("SELECT json_extract(data,'$.oil_life_pct') o, MIN(odometer) km FROM snapshots WHERE json_extract(data,'$.oil_life_pct') IS NOT NULL GROUP BY o ORDER BY km").all();
+  if (results.length < 3) return null; // el primer % visto puede estar a medias
+  const a = results[1], b = results[results.length - 1];
+  const drop = a.o - b.o;
+  return drop > 0 && b.km > a.km ? round((b.km - a.km) / drop, 0) : null;
+}
+function etaDate(days) { return days == null || !isFinite(days) ? null : new Date(Date.now() + days * 86400e3 + 3600e3).toISOString().slice(0, 10); }
+
 async function listMaint(env) {
   const odo = await currentOdo(env);
+  const kpd = await kmPerDay(env);
+  const oRate = await oilRate(env);
   const { results } = await env.DB.prepare('SELECT * FROM maintenance ORDER BY id').all();
   const now = Date.now();
   const order = { vencido: 0, pronto: 1, ok: 2, 'sin datos': 3 };
@@ -2034,10 +2244,15 @@ async function listMaint(env) {
       o = { ...o, pct: Math.max(o.pct || 0, 100 - oilLife), status: order[st] < order[o.status] ? st : o.status, oil_life: oilLife,
         summary: `Vida del aceite según el coche: ${oilLife} %` + (o.summary && o.status !== 'sin datos' ? ' · ' + o.summary : '') };
     }
+    // Fecha estimada: lo que llegue antes, los km al ritmo de uso o la fecha fija
+    let byKm = o.rem_km != null && kpd > 1 ? Math.max(0, o.rem_km / kpd) : null;
+    if (o.oil_life != null && oRate && kpd > 1) { const k = Math.max(0, (o.oil_life - 10) * oRate); byKm = Math.min(byKm ?? Infinity, k / kpd); o.oil_km_left = Math.round(k); }
+    const days = [byKm, o.rem_days].filter(x => x != null).reduce((a, b) => Math.min(a, b), Infinity);
+    o.eta = isFinite(days) ? etaDate(days) : null;
     const orig = results.find(r => r.id === i.id);
     return { ...o, last_km: orig.last_km, last_date: orig.last_date };
   }).sort((a, b) => order[a.status] - order[b.status] || b.pct - a.pct);
-  return { odometer: odo, items };
+  return { odometer: odo, km_per_day: kpd, oil_km_per_pct: oRate, items };
 }
 
 async function saveMaint(env, b) {

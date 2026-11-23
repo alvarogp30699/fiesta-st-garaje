@@ -1,5 +1,5 @@
 // Fiesta ST Garaje — widget para la pantalla de inicio del iPhone (app gratuita "Scriptable").
-// Tamaños: pequeño (lo básico) y mediano (todo). La primera vez que lo ejecutes dentro de Scriptable
+// Tamaños: pequeño (lo básico), mediano/grande (todo) y pantalla de bloqueo (rectangular, redondo y en línea). La primera vez que lo ejecutes dentro de Scriptable
 // te pide la URL del servidor y la contraseña (APP_KEY) y las guarda en el llavero del iPhone.
 
 const URL_KEY = 'fiesta_st_url', PASS_KEY = 'fiesta_st_key';
@@ -61,7 +61,7 @@ function ago(ts) {
 }
 
 const w = new ListWidget();
-w.backgroundColor = BG;
+if (!fam.startsWith('accessory')) w.backgroundColor = BG;
 
 // Fondo: foto del coche oscurecida para que se lea el texto (se guarda en el iPhone por si no hay conexión)
 async function background(file) {
@@ -85,7 +85,28 @@ async function background(file) {
 w.url = 'https://alvarogp30699.github.io/fiesta-st-garaje/';
 w.refreshAfterDate = new Date(Date.now() + 15 * 60e3);
 
-if (!d) {
+if (fam && fam.startsWith('accessory')) {
+  // ---------- Pantalla de bloqueo (iOS pinta en un solo color) ----------
+  const running = d && d.ignition && d.ignition !== 'off';
+  const lockTxt = !d ? '—' : running ? 'En marcha' : d.lock_checking ? 'Comprobando' : d.locked ? 'Cerrado' : 'ABIERTO';
+  if (fam === 'accessoryCircular') {
+    const gauge = w.addStack(); gauge.layoutVertically(); gauge.centerAlignContent();
+    w.addAccessoryWidgetBackground = true;
+    const a = gauge.addStack(); a.addSpacer(); txt(a, d ? n0(d.fuel_pct) + '%' : '—', 16, Color.white(), 'bold', true); a.addSpacer();
+    const b = gauge.addStack(); b.addSpacer(); txt(b, d ? (d.locked || running ? '⛽' : '🔓') : '', 11, Color.white()); b.addSpacer();
+  } else if (fam === 'accessoryInline') {
+    txt(w, d ? `⛽ ${n0(d.fuel_pct)} % · ${n0(d.range_km)} km · ${lockTxt}` : 'Fiesta ST sin datos', 12, Color.white());
+  } else {
+    // rectangular
+    const h = w.addStack(); txt(h, 'FIESTA ST', 11, Color.white(), 'bold', true); h.addSpacer(); txt(h, lockTxt, 11, Color.white(), 'bold');
+    txt(w, d ? `⛽ ${n0(d.fuel_pct)} % · ${n0(d.range_km)} km` : (err || 'Sin datos'), 14, Color.white(), 'bold', true);
+    if (d) {
+      const low = d.tyres_low || [];
+      const t = d.tyres || {};
+      txt(w, low.length ? `⚠︎ Rueda baja (${low.length})` : `${f2(t.fl)} ${f2(t.fr)} · ${f2(t.rl)} ${f2(t.rr)}`, 11, Color.white(), 'medium', true);
+    }
+  }
+} else if (!d) {
   w.setPadding(14, 14, 14, 14);
   txt(w, 'FIESTA ST', 11, MU, 'bold', true);
   w.addSpacer(6);
