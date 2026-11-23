@@ -1808,13 +1808,25 @@ async function getTyreSet(env) {
   // Con medidas del dibujo se calcula el desgaste real (la rueda más gastada manda). Nuevas: ~7 mm; mínimo legal 1,6 mm.
   const tr = (t.tread || []).filter(x => x.km != null);
   if (tr.length && t.mounted_km != null) {
-    const minOf = x => Math.min(...['fl', 'fr', 'rl', 'rr'].map(k => x[k]).filter(v => v != null));
+    const zmin = z => z == null ? null : typeof z === 'number' ? z : Math.min(...[z.o, z.c, z.i].filter(v => v != null));
+    const minOf = x => Math.min(...['fl', 'fr', 'rl', 'rr'].map(k => zmin(x[k])).filter(v => v != null));
     const last = tr[tr.length - 1], lastMin = minOf(last);
-    const newMm = t.new_mm || 7;
+    const newMm = t.new_mm || 6.5; // Eagle F1 SuperSport 225/40 R18 nueva: ~6-7 mm según la fuente
     let rate = null; // mm por cada 1.000 km
     if (tr.length >= 2 && last.km - tr[0].km >= 2000) rate = (minOf(tr[0]) - lastMin) / ((last.km - tr[0].km) / 1000);
     if (!(rate > 0) && last.km - t.mounted_km >= 2000) rate = (newMm - lastMin) / ((last.km - t.mounted_km) / 1000);
     out.tread_last = { ...last, min: lastMin };
+    out.new_mm = newMm;
+    // Cómo se gastan: centro (presión alta), hombros (presión baja) o un lado (alineación/caída)
+    const NAMES = { fl: 'delantera izq.', fr: 'delantera der.', rl: 'trasera izq.', rr: 'trasera der.' };
+    out.tread_notes = [];
+    for (const k of ['fl', 'fr', 'rl', 'rr']) {
+      const z = last[k];
+      if (!z || typeof z !== 'object' || z.o == null || z.c == null || z.i == null) continue;
+      if (z.c < Math.min(z.o, z.i) - 0.5) out.tread_notes.push(`${NAMES[k]}: más gastada en el centro (suele ser presión alta)`);
+      else if (z.o < z.c - 0.5 && z.i < z.c - 0.5) out.tread_notes.push(`${NAMES[k]}: gastados los dos hombros (suele ser presión baja)`);
+      else if (Math.abs(z.o - z.i) >= 0.8) out.tread_notes.push(`${NAMES[k]}: más gastada por ${z.i < z.o ? 'dentro' : 'fuera'} (revisa alineación/caída)`);
+    }
     out.tread_rate = rate > 0 ? round(rate, 2) : null;
     if (rate > 0) {
       const sinceKm = odo != null ? odo - last.km : 0;
@@ -1845,10 +1857,16 @@ async function setTyreSet(env, b) {
   else if (b.tread) {
     // Medida del dibujo en mm de cada rueda (con medidor o con una moneda de 1 €)
     const mm = v => { const x = Number(String(v ?? '').replace(',', '.')); return x > 0.5 && x < 12 ? round(x, 1) : null; };
-    const m = { date: new Date(Date.now() + 3600e3).toISOString().slice(0, 10), km: await currentOdo(env), fl: mm(b.tread.fl), fr: mm(b.tread.fr), rl: mm(b.tread.rl), rr: mm(b.tread.rr) };
-    if (![m.fl, m.fr, m.rl, m.rr].some(x => x != null)) throw httpError('Pon al menos una medida en mm', 400);
+    // Cada rueda: exterior, centro e interior (o un solo número)
+    const zones = v => {
+      if (v && typeof v === 'object') { const z = { o: mm(v.o), c: mm(v.c), i: mm(v.i) }; return [z.o, z.c, z.i].some(x => x != null) ? z : null; }
+      const x = mm(v); return x != null ? { o: null, c: x, i: null } : null;
+    };
+    const m = { date: new Date(Date.now() + 3600e3).toISOString().slice(0, 10), km: await currentOdo(env) };
+    for (const k of ['fl', 'fr', 'rl', 'rr']) m[k] = zones(b.tread[k]);
+    if (!['fl', 'fr', 'rl', 'rr'].some(k => m[k])) throw httpError('Pon al menos una medida en mm', 400);
     t.tread = [...(t.tread || []).filter(x => x.date !== m.date), m].slice(-20);
-    if (b.new_mm) t.new_mm = mm(b.new_mm);
+    if (b.new_mm != null && b.new_mm !== '') t.new_mm = mm(b.new_mm);
   } else {
     t.model = String(b.model || '').trim().slice(0, 60) || null;
     t.size = String(b.size || '').trim().slice(0, 30) || null;
