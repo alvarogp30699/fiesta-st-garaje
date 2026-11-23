@@ -97,7 +97,7 @@ if (!d) {
   txt(w, `${n0(d.range_km)} km`, 28, TX, 'bold', true);
   txt(w, `Depósito ${n0(d.fuel_pct)} %`, 12, (d.fuel_pct ?? 100) < 15 ? WA : MU);
   w.addSpacer(6);
-  txt(w, d.locked ? '● Cerrado' : '● Abierto', 13, d.locked ? OK : WA, 'bold');
+  txt(w, d.lock_checking ? '● Comprobando…' : d.locked ? '● Cerrado' : '● Abierto', 13, d.lock_checking ? MU : d.locked ? OK : WA, 'bold');
   const low = d.tyres_low || [], t = d.tyres || {};
   for (const [a, b] of [['fl', 'fr'], ['rl', 'rr']]) {
     const row = w.addStack();
@@ -119,7 +119,7 @@ if (!d) {
   txt(top, 'FIESTA ST', 11, AC, 'bold', true);
   if (d.circuit) { top.addSpacer(6); txt(top, '🏁 ' + d.circuit, 11, AC, 'bold'); }
   top.addSpacer();
-  txt(top, running ? `● En marcha · ${n0(d.speed_kmh)} km/h` : d.locked ? '● Cerrado' : '● Abierto', 11, running ? AC : d.locked ? OK : WA, 'bold');
+  txt(top, running ? `● En marcha · ${n0(d.speed_kmh)} km/h` : d.lock_checking ? '● Comprobando cierre…' : d.locked ? '● Cerrado' : '● Abierto', 11, running ? AC : d.lock_checking ? MU : d.locked ? OK : WA, 'bold');
   w.addSpacer(8);
 
   const body = w.addStack(); body.layoutHorizontally();
@@ -133,7 +133,8 @@ if (!d) {
   bar(c1, d.fuel_pct ?? 0, 100, (d.fuel_pct ?? 100) < 15 ? WA : AC);
   c1.addSpacer(3);
   txt(c1, `Depósito ${n0(d.fuel_pct)} %`, 11, new Color('#c9ced4'));
-  if (d.doors_open && d.doors_open.length) { c1.addSpacer(2); txt(c1, 'Puerta abierta', 11, WA, 'bold'); }
+  if (!d.lock_checking && d.doors_open && d.doors_open.length) { c1.addSpacer(2); txt(c1, 'Puerta abierta', 11, WA, 'bold'); }
+  else if (!d.lock_checking && d.windows_open && d.windows_open.length) { c1.addSpacer(2); txt(c1, 'Ventanilla bajada', 11, WA, 'bold'); }
 
   body.addSpacer(10);
 

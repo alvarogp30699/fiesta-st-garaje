@@ -97,6 +97,8 @@ export default {
       if (m === 'POST' && p === '/api/deadlines') return json(await saveDeadline(env, await req.json()));
       if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
+      if (m === 'GET' && p === '/api/expenses') return json(await listExpenses(env, url.searchParams.get('year')));
+      if (m === 'POST' && p === '/api/expenses') return json(await saveExpense(env, await req.json()));
       if (m === 'GET' && p === '/api/places') return json({ places: await getPlaces(env) });
       if (m === 'POST' && p === '/api/places') return json(await savePlace(env, await req.json()));
       if (m === 'GET' && p === '/api/tyres') return json(await getTyrePrefs(env));
@@ -109,6 +111,8 @@ export default {
       if (m === 'GET' && p === '/api/trips/records') return json(await tripRecords(env));
       if (m === 'GET' && p === '/api/fuel') return json(await nearbyFuel(env, url.searchParams));
       if (m === 'POST' && p === '/api/fuel/fav') return json(await setFavStation(env, await req.json()));
+      if (m === 'GET' && p === '/api/fuel/fav/prices') return json(await favPrices(env));
+      if (m === 'POST' && p === '/api/fuel/fav/alert') return json(await setFavAlert(env, await req.json()));
       if (m === 'GET' && p === '/api/trips') return json(await listTrips(env, clampInt(url.searchParams.get('limit'), 1, 200, 40)));
       if (m === 'GET' && (mt = p.match(/^\/api\/trips\/(\d+)$/))) return json(await getTrip(env, +mt[1]));
       if (m === 'GET' && p === '/api/maintenance') return json(await listMaint(env));
@@ -169,8 +173,18 @@ async function readCar(env) {
   // Recién aparcado y aún sin dato de cierre: se está comprobando (no asustar con "Abierto")
   const stRow = await env.DB.prepare("SELECT v FROM kv WHERE k = 'state'").first();
   const stNow = stRow ? JSON.parse(stRow.v) : {};
-  car.lock_checking = car.locked === false && car.ignition === 'off' && !!(stNow.parkChecks && stNow.parkChecks.length) ||
-    (car.locked === false && car.ignition === 'off' && stNow.parked && Date.now() - stNow.parked.ts < UNLOCKED_GRACE_S * 1000);
+  const notShut = car.locked === false || (car.doors_open || []).length || (car.windows_open || []).length;
+  car.lock_checking = !!notShut && car.ignition === 'off' && (!!(stNow.parkChecks && stNow.parkChecks.length) ||
+    !!(stNow.parked && Date.now() - stNow.parked.ts < UNLOCKED_GRACE_S * 1000));
+  // Viaje en curso (para la pantalla de conducción)
+  if (stNow.trip && car.ignition !== 'off') {
+    const t = stNow.trip, km = car.odometer_km != null && t.start_odo != null ? Math.max(0, car.odometer_km - t.start_odo) : null;
+    const ffRow = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_factor'").first();
+    const fuelL = t.start_fuel != null && car.fuel_pct != null ? Math.max(0, (t.start_fuel - car.fuel_pct) / 100 * TANK_L * (ffRow ? Number(ffRow.v) : 1)) : null;
+    const mins = (Date.now() - t.start_ts) / 60e3;
+    car.trip_live = { start_ts: t.start_ts, km, mins: Math.round(mins), avg: km && mins > 1 ? Math.round(km / (mins / 60)) : null,
+      fuel_l: fuelL != null ? round(fuelL, 1) : null, l100: km > 15 && fuelL ? round(fuelL / km * 100, 1) : null, warm: !!t.warm, max_speed: t.max_speed || null };
+  }
   car.alerts = Object.entries(carAlerts(car)).filter(([k]) => !(track.active && k.startsWith('tyre_')) && !(car.lock_checking && (k === 'unlocked' || k === 'open'))).map(([, v]) => v);
   return car;
 }
@@ -612,7 +626,8 @@ function processCar(db, st, c, opts = {}) {
   }
 
   // Avisos (solo cuando aparecen)
-  if (st.parkChecks && (c.locked || (c.ignition && c.ignition !== 'off'))) st.parkChecks = null; // ya cerrado (o vuelve a arrancar)
+  const allShut = c.locked && !(c.doors_open || []).length && !(c.windows_open || []).length;
+  if (st.parkChecks && (allShut || (c.ignition && c.ignition !== 'off'))) st.parkChecks = null; // ya cerrado del todo (o vuelve a arrancar)
   const cur = carAlerts(c);
   if (cur.unlocked || cur.open) {
     st.unlockedSince = st.unlockedSince || c.ts;
@@ -645,7 +660,7 @@ async function ingest(env, car, st) {
   delete st.newRefuel;
   if (nr && nr.lat != null) {
     try {
-      const type = env.FUEL_TYPE || '98';
+      const type = await userFuelType(env);
       const { list } = await fuelStationsNear(env, nr.lat, nr.lon);
       const near = list.map(s => ({ ...s, km: distKm(nr.lat, nr.lon, s.lat, s.lon) })).filter(s => s.km < 0.35 && s['p' + type]).sort((a, b) => a.km - b.km)[0];
       if (near) {
@@ -657,10 +672,26 @@ async function ingest(env, car, st) {
       }
     } catch (e) { console.error('precio auto', e); }
   }
+  // Repostaje inteligente: al bajar del 20 % (una vez por depósito), con el precio de tu gasolinera
+  if (car.fuel_pct != null) {
+    if (car.fuel_pct >= 40) st.fuelWarned = false;
+    else if (car.fuel_pct < 20 && !st.fuelWarned) {
+      st.fuelWarned = true;
+      let body = `Te quedan unos ${car.range_km ?? '—'} km (${Math.round(car.fuel_pct)} %).`;
+      try {
+        const type = await userFuelType(env);
+        const fav = await favStation(env, type, car.location && car.location.lat, car.location && car.location.lon);
+        if (fav && !fav.missing && fav.price) body += ` ${fav.name} ${titleCase(fav.town)} hoy a ${fmt(fav.price, 3)} €/L${fav.km != null ? ` (a ${fmt(fav.km, 1)} km)` : ''}: lleno por unos ${fmt(fav.price * TANK_L * (1 - car.fuel_pct / 100), 0)} €.`;
+      } catch (e) { /* sin precio */ }
+      notes.push({ title: '⛽ Toca repostar', body, url: '#datos', tag: 'fuel_low' });
+    }
+  }
   stmts.push(stateStmt(env.DB, st));
   await env.DB.batch(stmts);
   for (const n of notes) await sendPushAll(env, n);
 }
+
+function titleCase(t) { return String(t || '').toLowerCase().replace(/(^|[\s-])\p{L}/gu, m => m.toUpperCase()); }
 
 // Revisión diaria a las 9:00: mantenimiento y batería.
 async function daily(env, when) {
@@ -693,6 +724,10 @@ async function daily(env, when) {
   if (st.parked && !st.trip && Date.now() - st.parked.ts > 3 * 86400e3 && last && last.battery != null && last.battery < 12.3) {
     await sendPushAll(env, { title: 'Batería baja', body: `Lleva ${Math.floor((Date.now() - st.parked.ts) / 86400e3)} días parado y la batería está a ${fmt(last.battery, 2)} V. Arráncalo y da una vuelta de 20 min.`, url: '#estado', tag: 'batt_idle' });
   }
+  try { await favPriceDaily(env); } catch (e) { console.error('precio habitual', e); }
+  try { await slowPuncture(env, day); } catch (e) { console.error('pinchazo', e); }
+  try { await shortTripsBattery(env, day); } catch (e) { console.error('trayectos cortos', e); }
+  try { await calibrateGears(env); } catch (e) { console.error('marchas', e); }
   const b = await getBattery(env, 14);
   if (b.status === 'bajando') {
     await sendPushAll(env, { title: 'Batería de 12 V', body: `Va bajando unos ${fmt(Math.abs(b.slope), 2)} V al día. Conviene revisarla.`, url: '#datos', tag: 'batt_trend' });
@@ -712,6 +747,7 @@ async function prepare(env) {
   ]);
   const ccRow = ccRes;
   try { CUSTOM_CIRCUITS = JSON.parse((ccRow && ccRow.results[0] && ccRow.results[0].v) || '[]'); } catch (e) { CUSTOM_CIRCUITS = []; }
+  try { const g = await db.prepare("SELECT v FROM kv WHERE k = 'gear_ratios'").first(); if (g) { const a = JSON.parse(g.v); if (Array.isArray(a) && a.length === 6) GEAR_KMH_PER_1000 = a; } } catch (e) {}
   const s = (srcRow.results && srcRow.results[0] && srcRow.results[0].v) || env.SOURCE || 'mock';
   if (ready && s === SRC) return;
   SRC = s;
@@ -916,13 +952,35 @@ async function getTrip(env, id) {
 const r2 = v => v == null ? null : Math.round(v * 100) / 100;
 // Relación km/h por cada 1.000 rpm de cada marcha (Fiesta ST Mk8, aprox.): sirve para deducir la marcha,
 // porque en cambio manual Ford no la manda.
-const GEAR_KMH_PER_1000 = [7.6, 13.4, 20.3, 27.0, 33.6, 40.6];
+let GEAR_KMH_PER_1000 = [7.6, 13.4, 20.3, 27.0, 33.6, 40.6]; // se afinan solas con tus datos (calibrateGears)
 function gearFrom(speed, rpm) {
   if (!speed || speed < 8 || !rpm || rpm < 1100) return null;
   const r = speed / (rpm / 1000);
   let best = null, err = 1e9;
   GEAR_KMH_PER_1000.forEach((g, i) => { const e = Math.abs(r - g) / g; if (e < err) { err = e; best = i + 1; } });
   return err < 0.12 ? best : null; // embrague pisado o punto muerto: sin marcha
+}
+
+// Afina las relaciones de cambio con las lecturas reales (velocidad/rpm estables en cada marcha)
+async function calibrateGears(env) {
+  const { results } = await env.DB.prepare("SELECT data FROM snapshots WHERE ts > ? ORDER BY ts").bind(Date.now() - 60 * 86400e3).all();
+  const buckets = GEAR_KMH_PER_1000.map(() => []);
+  for (const r of results) {
+    let c; try { c = JSON.parse(r.data); } catch (e) { continue; }
+    if (!(c.speed_kmh >= 10 && c.rpm >= 1300 && !(c.brake_pct > 0))) continue;
+    const ratio = c.speed_kmh / (c.rpm / 1000);
+    const g = gearFrom(c.speed_kmh, c.rpm);
+    if (g) buckets[g - 1].push(ratio);
+  }
+  const next = GEAR_KMH_PER_1000.map((v, i) => {
+    const b = buckets[i].sort((x, y) => x - y);
+    return b.length >= 4 ? round(b[Math.floor(b.length / 2)], 2) : v;
+  });
+  if (next.every((v, i) => i === 0 || v > next[i - 1])) {
+    GEAR_KMH_PER_1000 = next;
+    await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('gear_ratios', ?)").bind(JSON.stringify(next)).run();
+  }
+  return { ratios: GEAR_KMH_PER_1000, samples: buckets.map(b => b.length) };
 }
 
 // Lecturas del coche durante el trayecto (una por cada dato nuevo que mandó)
@@ -948,7 +1006,8 @@ async function tripSeries(env, t) {
     warm_min: (() => { const w = series.find(p => p.temp != null && p.temp >= OIL_WARM); return w ? Math.max(0, Math.round((w.ts - t.start_ts) / 60e3)) : null; })(),
     tyre_rise: (() => { const a = series.find(p => p.tf != null), b = [...series].reverse().find(p => p.tf != null); return a && b ? { front: r2(b.tf - a.tf), rear: r2(b.tr - a.tr), from: [a.tf, a.tr], to: [b.tf, b.tr] } : null; })(),
     alternator_v: (() => { const v = series.filter(p => p.rpm > 1500 && p.bat).map(p => p.bat); return v.length ? r2(v.reduce((a, b) => a + b, 0) / v.length) : null; })(),
-    gears: (() => { const g = {}; for (const p of series) if (p.gear) g[p.gear] = (g[p.gear] || 0) + 1; return g; })()
+    gears: (() => { const g = {}; for (const p of series) if (p.gear) g[p.gear] = (g[p.gear] || 0) + 1; return g; })(),
+    cold_revs: (() => { const c = series.filter(p => p.temp != null && p.temp < 70 && p.rpm > 3000); return c.length ? { rpm: Math.max(...c.map(p => p.rpm)), temp: Math.min(...c.map(p => p.temp)) } : null; })()
   } : null;
   return { series, stats };
 }
@@ -1007,6 +1066,125 @@ async function addCustomCircuit(env, b) {
 async function delCustomCircuit(env, id) {
   CUSTOM_CIRCUITS = CUSTOM_CIRCUITS.filter(c => c.id !== id);
   return saveCustom(env);
+}
+
+// ---------- Historial de precio de tu gasolinera ----------
+async function favPriceDaily(env) {
+  const type = await userFuelType(env);
+  const fav = await favStation(env, type);
+  if (!fav || fav.missing) return;
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_prices'").first();
+  const hist = row ? JSON.parse(row.v) : [];
+  const d = new Date(Date.now() + 3600e3).toISOString().slice(0, 10);
+  if (!hist.length || hist[hist.length - 1].d !== d) hist.push({ d, p95: fav.p95 ?? null, p98: fav.p98 ?? null });
+  while (hist.length > 180) hist.shift();
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_prices', ?)").bind(JSON.stringify(hist)).run();
+  const al = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_alert'").first();
+  const limit = al ? Number(al.v) : null;
+  const p = fav['p' + type];
+  const prev = hist.length > 1 ? hist[hist.length - 2]['p' + type] : null;
+  if (limit && p && p <= limit && !(prev && prev <= limit)) {
+    await sendPushAll(env, { title: '⛽ Gasolina barata', body: `${fav.name} ${titleCase(fav.town)}: la ${type} a ${fmt(p, 3)} €/L (tu aviso: ${fmt(limit, 3)}).`, url: '#datos', tag: 'fav_price' });
+  }
+}
+
+async function favPrices(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_prices'").first();
+  const al = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_alert'").first();
+  return { history: row ? JSON.parse(row.v) : [], alert: al ? Number(al.v) : null };
+}
+
+async function setFavAlert(env, b) {
+  const v = parseFloat(String(b.limit ?? '').replace(',', '.'));
+  if (v > 0.5 && v < 4) await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fav_alert', ?)").bind(String(v)).run();
+  else await env.DB.prepare("DELETE FROM kv WHERE k = 'fav_alert'").run();
+  return favPrices(env);
+}
+
+// ---------- Pinchazo lento: presiones en frío de cada mañana ----------
+async function slowPuncture(env, day) {
+  const st = await loadState(env);
+  if (st.trip) return;
+  const last = await env.DB.prepare('SELECT data FROM snapshots ORDER BY ts DESC LIMIT 1').first();
+  if (!last) return;
+  const c = JSON.parse(last.data);
+  if (!c.tyres || c.track) return;
+  // Solo cuenta como "en frío" si lleva al menos 3 h parado
+  if (!st.parked || Date.now() - st.parked.ts < 3 * 3600e3) return;
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'cold_tyres'").first();
+  const hist = (row ? JSON.parse(row.v) : []).filter(h => h.d !== day);
+  hist.push({ d: day, ...c.tyres });
+  while (hist.length > 30) hist.shift();
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('cold_tyres', ?)").bind(JSON.stringify(hist)).run();
+  if (hist.length < 4) return;
+  const a = hist[hist.length - 4], b = hist[hist.length - 1];
+  const keys = ['fl', 'fr', 'rl', 'rr'].filter(k => a[k] != null && b[k] != null);
+  const drop = Object.fromEntries(keys.map(k => [k, a[k] - b[k]]));
+  for (const k of keys) {
+    const others = keys.filter(x => x !== k).map(x => drop[x]);
+    const avgOthers = others.reduce((s, v) => s + v, 0) / (others.length || 1);
+    // Pierde 0,1 bar más que las demás en 3 días (las demás bajan igual por el frío)
+    if (drop[k] - avgOthers >= 0.1 && drop[k] >= 0.1) {
+      await sendPushAll(env, { title: '🛞 Posible pinchazo lento', body: `La rueda ${TYRE_NAMES[k] || k} ha bajado ${fmt(drop[k], 2)} bar en 3 días (en frío), más que las otras. Revísala.`, url: '#estado', tag: 'slow_' + k });
+      break;
+    }
+  }
+}
+
+// ---------- Batería y trayectos cortos ----------
+async function shortTripsBattery(env, day) {
+  const since = Date.now() - 5 * 86400e3;
+  const { results } = await env.DB.prepare('SELECT km, duration_s FROM trips WHERE start_ts >= ?').bind(since).all();
+  if (results.length < 4 || results.some(t => t.km >= 25 || t.duration_s >= 25 * 60)) return;
+  const b = await getBattery(env, 7);
+  const days = (b.days || []).filter(d => d.min != null);
+  if (days.length < 3) return;
+  const lastMin = days[days.length - 1].min, firstMin = days[0].min;
+  if (!(lastMin < 12.4 && lastMin < firstMin)) return;
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'short_trips_warn'").first();
+  if (row && Date.now() - Number(row.v) < 5 * 86400e3) return;
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('short_trips_warn', ?)").bind(String(Date.now())).run();
+  await sendPushAll(env, { title: 'Batería y trayectos cortos', body: `${results.length} trayectos cortos en 5 días y la batería va bajando (${fmt(lastMin, 2)} V en reposo). Un trayecto de 30–40 min por autovía la recargaría.`, url: '#datos', tag: 'short_trips' });
+}
+
+// ---------- Gastos del coche ----------
+const EXPENSE_CATS = ['Taller', 'Neumáticos', 'Seguro', 'ITV', 'Impuesto', 'Circuito', 'Peajes', 'Lavado', 'Piezas', 'Otros'];
+
+async function rawExpenses(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'expenses'").first();
+  return row ? JSON.parse(row.v) : [];
+}
+
+async function saveExpense(env, b) {
+  let list = await rawExpenses(env);
+  if (b.delete) list = list.filter(e => e.id !== b.delete);
+  else {
+    const eur = Number(String(b.eur ?? '').replace(',', '.'));
+    if (!(eur > 0 && eur < 100000)) throw httpError('El importe no es válido', 400);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(b.date || '') ? b.date : new Date().toISOString().slice(0, 10);
+    const cat = EXPENSE_CATS.includes(b.cat) ? b.cat : 'Otros';
+    const item = { id: b.id || 'e' + Date.now(), date, cat, desc: String(b.desc || '').trim().slice(0, 80), eur: round(eur, 2) };
+    const i = list.findIndex(e => e.id === item.id);
+    if (i >= 0) list[i] = item; else list.push(item);
+  }
+  list.sort((a, c) => c.date.localeCompare(a.date));
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('expenses', ?)").bind(JSON.stringify(list)).run();
+  return listExpenses(env, b.year);
+}
+
+async function listExpenses(env, year) {
+  const y = Number(year) || new Date().getFullYear();
+  const from = Date.UTC(y, 0, 1) - 3600e3, to = Date.UTC(y + 1, 0, 1) - 3600e3;
+  const items = (await rawExpenses(env)).filter(e => e.date.startsWith(String(y)));
+  const { results: rf } = await env.DB.prepare('SELECT ts, price_total, litres, station FROM refuels WHERE ts >= ? AND ts < ? AND price_total > 0 ORDER BY ts DESC').bind(from, to).all();
+  const fuel = round(rf.reduce((a, r) => a + r.price_total, 0), 2);
+  const byCat = {};
+  for (const e of items) byCat[e.cat] = round((byCat[e.cat] || 0) + e.eur, 2);
+  if (fuel) byCat['Gasolina'] = fuel;
+  const total = round(Object.values(byCat).reduce((a, v) => a + v, 0), 2);
+  const o1 = await env.DB.prepare('SELECT MIN(odometer) AS a, MAX(odometer) AS b FROM snapshots WHERE ts >= ? AND ts < ? AND odometer IS NOT NULL').bind(from, to).first();
+  const km = o1 && o1.a != null ? Math.round(o1.b - o1.a) : 0;
+  return { year: y, cats: EXPENSE_CATS, items, refuels: rf, by_cat: byCat, total, km, eur_km: km > 50 ? round(total / km, 3) : null };
 }
 
 // ---------- Lugares guardados (Casa, Trabajo…) ----------
@@ -1186,6 +1364,7 @@ async function widget(env) {
     range_km: c.range_km, fuel_pct: c.fuel_pct, locked: c.locked, doors_open: c.doors_open || [],
     tyres: c.tyres, tyres_low: c.tyres_low || [], battery_v: c.battery_v, odometer_km: c.odometer_km,
     alerts: c.alerts || [], data_ts: c.data_ts || c.ts, circuit: c.circuit || null,
+    lock_checking: !!c.lock_checking, windows_open: c.windows_open || [],
     engine_c: c.oil_c ?? c.coolant_c ?? null, oil_life_pct: c.oil_life_pct ?? null, battery_soc: c.battery_soc ?? null,
     ignition: c.ignition, speed_kmh: c.speed_kmh || 0, next: await widgetNext(env)
   };
@@ -1348,6 +1527,16 @@ async function weeklySummary(env) {
   if (t.km > 20 && t.fuel) parts.push(`${fmt(t.fuel / t.km * 100, 1)} l/100 km`);
   if (r.eur) parts.push(`${fmt(r.eur, 2)} € en gasolina`);
   if (t.top) parts.push(`punta ${t.top} km/h`);
+  try {
+    const { commute } = await listTrips(env, 200);
+    const c = commute && commute[0];
+    if (c) {
+      const { results } = await env.DB.prepare('SELECT points, duration_s FROM trips WHERE start_ts >= ?').bind(from).all();
+      const places = await getPlaces(env);
+      const wk = results.filter(t => { const { from: a, to: b } = tripPlaces(JSON.parse(t.points || '[]'), places); return a && b && a !== b && [a, b].sort().join(' ↔ ') === c.route; });
+      if (wk.length) parts.push(`${c.route}: ${wk.length} viajes, media ${Math.round(wk.reduce((s, t) => s + t.duration_s, 0) / wk.length / 60)} min`);
+    }
+  } catch (e) { /* sin lugares */ }
   parts.push(due ? `${due} tarea${due > 1 ? 's' : ''} de taller pendiente${due > 1 ? 's' : ''}` : 'todo al día en el taller');
   return { title: 'Tu semana con el ST', body: parts.join(' · '), url: '#viajes', tag: 'weekly' };
 }
@@ -1420,8 +1609,14 @@ async function fuelStations(env, prov) {
   return c;
 }
 
+async function userFuelType(env) {
+  const r = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_type'").first();
+  return r ? r.v : (env.FUEL_TYPE || '95');
+}
+
 async function nearbyFuel(env, qs) {
-  const type = qs.get('type') === '95' ? '95' : '98';
+  const type = qs.get('type') === '98' ? '98' : '95';
+  if (qs.get('type')) await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('fuel_type', ?)").bind(type).run(); // la que usas, para los precios automáticos
   let lat = parseFloat(qs.get('lat')), lon = parseFloat(qs.get('lon'));
   if (isNaN(lat) || isNaN(lon)) {
     const last = await env.DB.prepare('SELECT data FROM snapshots ORDER BY ts DESC LIMIT 1').first();
@@ -1502,8 +1697,16 @@ async function listMaint(env) {
   const { results } = await env.DB.prepare('SELECT * FROM maintenance ORDER BY id').all();
   const now = Date.now();
   const order = { vencido: 0, pronto: 1, ok: 2, 'sin datos': 3 };
+  const lastSnap = await env.DB.prepare('SELECT data FROM snapshots ORDER BY ts DESC LIMIT 1').first();
+  const oilLife = lastSnap ? JSON.parse(lastSnap.data).oil_life_pct : null;
   const items = (await Promise.all(results.map(i => brakeWear(env, i, odo)))).map(i => {
-    const o = maintStatus(i, odo, now);
+    let o = maintStatus(i, odo, now);
+    if (oilLife != null && /aceite/i.test(i.name)) {
+      // El coche calcula la vida del aceite con cómo conduces: manda sobre los km fijos
+      const st = oilLife <= 10 ? 'vencido' : oilLife <= 25 ? 'pronto' : 'ok';
+      o = { ...o, pct: Math.max(o.pct || 0, 100 - oilLife), status: order[st] < order[o.status] ? st : o.status, oil_life: oilLife,
+        summary: `Vida del aceite según el coche: ${oilLife} %` + (o.summary && o.status !== 'sin datos' ? ' · ' + o.summary : '') };
+    }
     const orig = results.find(r => r.id === i.id);
     return { ...o, last_km: orig.last_km, last_date: orig.last_date };
   }).sort((a, b) => order[a.status] - order[b.status] || b.pct - a.pct);

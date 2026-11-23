@@ -131,7 +131,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let favHist = null, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -187,6 +187,8 @@ async function loadFor(t, force) {
     add('circuits', 300e3, async () => { const r = await api('/api/circuits'); circuits = r.circuits; customCircuits = r.custom || []; });
   }
   if (t === 'datos') add('datos', 120e3, async () => { [hist, refuels] = await Promise.all([api('/api/history?days=7'), api('/api/refuels')]); });
+  if (t === 'datos') add('favhist', 600e3, async () => { favHist = await api('/api/fuel/fav/prices'); });
+  if (t === 'datos') add('expenses', 120e3, async () => { expenses = await api('/api/expenses'); });
   if (!jobs.length) return;
   try { await Promise.all(jobs); error = null; } catch (e) { error = e.message; }
   if (tab === t && !sheet) render();
@@ -418,16 +420,20 @@ function viewMotor(c) {
     : oil < hot ? ['Casi listo. Aún sin apretar a fondo.', C.wa]
     : ['A temperatura. Ya puedes apretar.', C.ok];
   const z = (from, to) => Math.max(0, Math.min(1, (oil - from) / (to - from))) * 100;
+  const tl = c.trip_live;
+  const lastData = c.data_ts ? Math.round((Date.now() - c.data_ts) / 60e3) : null;
   return `
-  <div class="pn col" style="gap:14px;padding:16px">
-    ${revBar(running ? c.rpm : 0)}
-    <div class="row m" style="font-size:11px;color:#7d858f"><span>0</span><span>2</span><span>4</span><span>6</span><span>×1000</span></div>
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px">
-      <div class="col" style="gap:2px"><span class="k">Velocidad</span><span class="m" style="font-size:44px;font-weight:700;line-height:1">${running ? nf(c.speed_kmh) : '—'}</span><span style="font-size:12px;color:#7d858f">km/h</span></div>
-      <div style="width:104px;height:120px;border:2px solid ${running ? C.ac : '#2e333a'};border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center"><span class="m" style="font-size:84px;font-weight:700;line-height:.9;color:${running ? C.ac : '#3a3f46'}">${running && c.gear ? c.gear : 'N'}</span><span class="k" style="color:${running ? C.ac : '#3a3f46'}">Marcha</span></div>
-      <div class="col" style="gap:2px;align-items:flex-end"><span class="k">Régimen</span><span class="m" style="font-size:40px;font-weight:700;line-height:1">${running ? nf(c.rpm) : '—'}</span><span style="font-size:12px;color:#7d858f">rpm</span></div>
+  ${running ? `<div class="pn pad col" style="gap:12px">
+    <div class="row"><span class="k" style="color:${C.ac}">● Viaje en curso</span><span style="font-size:12px;color:#7d858f">dato del coche ${lastData != null ? (lastData < 1 ? 'ahora' : 'hace ' + lastData + ' min') : ''}</span></div>
+    <div class="g3" style="gap:8px">
+      <div class="col" style="gap:2px"><span class="k">Tiempo</span><span class="m" style="font-size:24px;font-weight:700">${tl ? clock(tl.mins * 60) : '—'}</span></div>
+      <div class="col" style="gap:2px"><span class="k">Recorrido</span><span class="m" style="font-size:24px;font-weight:700">${tl && tl.km != null ? nf(tl.km) : '—'} <span style="font-size:12px;color:#7d858f">km</span></span></div>
+      <div class="col" style="gap:2px"><span class="k">Media</span><span class="m" style="font-size:24px;font-weight:700">${tl && tl.avg != null ? nf(tl.avg) : '—'} <span style="font-size:12px;color:#7d858f">km/h</span></span></div>
     </div>
-  </div>
+    <div class="row" style="padding-top:8px;border-top:1px solid #1b1e22"><span style="font-size:13px;color:#7d858f">Última lectura</span><span class="m" style="font-size:15px;font-weight:700">${nf(c.speed_kmh)} km/h · ${nf(c.rpm)} rpm${c.gear ? ' · ' + c.gear + 'ª' : ''}</span></div>
+    ${tl && tl.fuel_l != null ? `<div class="row"><span style="font-size:13px;color:#7d858f">Gasolina gastada</span><span class="m" style="font-size:15px;font-weight:700">${nf(tl.fuel_l, 1)} L${tl.l100 ? ' · ' + nf(tl.l100, 1) + ' l/100' : ''}</span></div>` : ''}
+    <p class="muted" style="margin:0">El coche manda un dato cada 2–5 minutos: no es un marcador en directo, pero sí el resumen del viaje mientras conduces.</p>
+  </div>` : ''}
   <div class="pn pad col" style="gap:10px">
     <div class="row" style="align-items:baseline"><span class="k">${useOil ? 'Aceite' : 'Temperatura motor'}</span><span class="m" style="font-size:30px;font-weight:700">${nf(oil)} <span style="font-size:14px;color:#7d858f">°C</span></span></div>
     <div style="display:grid;grid-template-columns:6fr ${hot - 60}fr ${120 - hot}fr;gap:4px;height:12px">
@@ -442,11 +448,7 @@ function viewMotor(c) {
   <div class="g3">
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${useOil ? 'Refrig.' : 'Vida aceite'}</span><span class="m" style="font-size:22px;font-weight:700;${useOil && c.coolant_c > 105 ? 'color:' + C.bad : ''}">${useOil ? nf(c.coolant_c) + '°' : nf(c.oil_life_pct) + '%'}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${c.outside_c != null ? 'Exterior' : 'Freno mano'}</span><span class="m" style="font-size:22px;font-weight:700">${c.outside_c != null ? nf(c.outside_c) + '°' : c.parking_brake == null ? '—' : c.parking_brake ? 'ON' : 'OFF'}</span></div>
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${nf(c.battery_v, 1)}</span></div>
-  </div>
-  <div class="pn pad" style="display:grid;grid-template-columns:auto 1fr auto;gap:10px 12px;align-items:center">
-    <span class="k">Gas</span><div class="bar"><div style="width:${running ? c.throttle_pct : 0}%;background:${C.ok};transition:width .4s"></div></div><span class="m" style="font-size:14px;font-weight:600;min-width:38px;text-align:right">${running ? nf(c.throttle_pct) + '%' : '—'}</span>
-    <span class="k">Freno</span><div class="bar"><div style="width:${running ? c.brake_pct : 0}%;background:${C.bad};transition:width .4s"></div></div><span class="m" style="font-size:14px;font-weight:600;min-width:38px;text-align:right">${running ? nf(c.brake_pct) + '%' : '—'}</span>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${nf(c.battery_v, 1)}</span><span style="font-size:11px;color:${running ? (c.battery_v >= 13.4 ? C.ok : C.wa) : '#7d858f'}">${running ? (c.battery_v >= 13.4 ? 'Cargando' : 'Carga baja') : 'En reposo'}</span></div>
   </div>
   <div class="pn pad col" style="gap:10px">
     <div class="row"><span class="k">Modo circuito</span>${c.track ? `<span class="tag" style="color:${C.ac};border-color:#4a4210">${c.track.auto ? esc(c.track.circuit) : 'Activo hasta las ' + hm(c.track.until)}</span>` : ''}</div>
@@ -456,7 +458,7 @@ function viewMotor(c) {
     ${c.track && c.track.auto ? '' : '<button class="btn sec" id="addCircuit">📍 Estoy en un circuito que no conoce: guardarlo</button>'}
     ${customCircuits.map(cc => `<div class="row"><span style="font-size:14px">📍 ${esc(cc.name)}</span><button class="btn sec" style="padding:4px 10px;min-height:0" data-delcircuit="${esc(cc.id)}">Quitar</button></div>`).join('')}
   </div>
-  <button class="btn sec" id="driveBtn">Abrir modo conducción</button>`;
+  ${running ? '<button class="btn sec" id="driveBtn">Pantalla grande del viaje</button>' : ''}`;
 }
 
 function viewViajes() {
@@ -568,7 +570,74 @@ function viewTrip(t) {
   ${gears}
   ${chart('Temperatura del motor', 'temp', { min: 0, max: 120, fmt: v => nf(v) + '°', color: C.wa })}
   ${chart('Depósito', 'fuel', { min: 0, max: 100, fmt: v => nf(v) + '%', color: C.ok })}
-  ${tyre}`}`;
+  ${tyre}`}
+  ${st && st.cold_revs ? `<div class="pn pad" style="border-color:${C.blue}55"><span style="font-size:14px;color:#c9ced4">❄️ Llegaste a <b>${nf(st.cold_revs.rpm)} rpm</b> con el motor a ${nf(st.cold_revs.temp)}°. Hasta los 70–80° mejor no pasar de 3.000.</span></div>` : ''}
+  <div class="btns"><button class="btn sec" id="imgBtn">Compartir imagen</button><button class="btn sec" id="gpxBtn">Exportar GPX</button></div>`;
+}
+
+// ---------- Exportar trayecto ----------
+async function shareBlob(blob, name, title) {
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function exportGpx(t) {
+  if (!t) return;
+  const pts = (t.points || []);
+  const name = `${t.from || 'Salida'} → ${t.to || 'Llegada'} · ${new Date(t.start_ts).toLocaleDateString('es-ES')}`;
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Fiesta ST Garaje" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><name>${name.replace(/[<&>]/g, '')}</name><trkseg>
+${pts.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[3] ? `<time>${new Date(p[3]).toISOString()}</time>` : ''}${p[2] != null ? `<extensions><speed>${(p[2] / 3.6).toFixed(2)}</speed></extensions>` : ''}</trkpt>`).join('\n')}
+</trkseg></trk></gpx>`;
+  shareBlob(new Blob([gpx], { type: 'application/gpx+xml' }), `trayecto-${t.id}.gpx`, name);
+}
+
+function shareTripImage(t) {
+  if (!t) return;
+  const W = 1080, H = 1350, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0a0b0d'; g.fillRect(0, 0, W, H);
+  const pts = (t.points || []).filter(p => p[0] != null);
+  // Recorrido
+  const box = { x: 80, y: 260, w: W - 160, h: 620 };
+  g.strokeStyle = '#1b1e22'; g.lineWidth = 2; g.strokeRect(box.x, box.y, box.w, box.h);
+  if (pts.length > 1) {
+    const la = pts.map(p => p[0]), lo = pts.map(p => p[1]);
+    const minLa = Math.min(...la), maxLa = Math.max(...la), minLo = Math.min(...lo), maxLo = Math.max(...lo);
+    const k = Math.cos((minLa + maxLa) / 2 * Math.PI / 180);
+    const sx = (maxLo - minLo) * k || 1e-6, sy = (maxLa - minLa) || 1e-6;
+    const sc = Math.min((box.w - 80) / sx, (box.h - 80) / sy);
+    const ox = box.x + (box.w - sx * sc) / 2, oy = box.y + (box.h - sy * sc) / 2;
+    const P = p => [ox + (p[1] - minLo) * k * sc, oy + (maxLa - p[0]) * sc];
+    g.lineWidth = 10; g.lineCap = 'round'; g.lineJoin = 'round';
+    for (let i = 1; i < pts.length; i++) {
+      const v = pts[i][2] || 0;
+      g.strokeStyle = t.max_speed == null ? '#ffd400' : v > 95 ? '#ff4d3d' : v >= 70 ? '#ffb21e' : '#ffd400';
+      const [a, b] = P(pts[i - 1]), [c, d] = P(pts[i]);
+      g.beginPath(); g.moveTo(a, b); g.lineTo(c, d); g.stroke();
+    }
+    const dot = (p, col) => { const [x, y] = P(p); g.fillStyle = col; g.beginPath(); g.arc(x, y, 16, 0, 7); g.fill(); g.strokeStyle = '#0a0b0d'; g.lineWidth = 5; g.stroke(); };
+    dot(pts[0], '#2ee59d'); dot(pts[pts.length - 1], '#f4f5f6');
+  }
+  // Textos
+  g.fillStyle = '#ffd400'; g.font = '700 34px "Chakra Petch", monospace'; g.fillText('FIESTA ST', 80, 110);
+  g.fillStyle = '#f4f5f6'; g.font = '700 64px "Chakra Petch", monospace';
+  g.fillText((t.from || t.to ? `${t.from || '…'} → ${t.to || '…'}` : `Trayecto #${t.id}`).toUpperCase().slice(0, 26), 80, 190);
+  g.fillStyle = '#7d858f'; g.font = '500 30px "Inter Tight", sans-serif';
+  g.fillText(new Date(t.start_ts).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }) + ` · ${hm(t.start_ts)} → ${hm(t.end_ts)}`, 80, 236);
+  const l100 = t.km > 1 && t.fuel_used_l ? t.fuel_used_l / t.km * 100 : null;
+  const stats = [['DISTANCIA', nf(t.km, 1) + ' km'], ['TIEMPO', t.duration_s < 3600 ? Math.round(t.duration_s / 60) + ' min' : Math.floor(t.duration_s / 3600) + ' h ' + String(Math.round(t.duration_s % 3600 / 60)).padStart(2, '0')], ['MEDIA', nf(t.avg_speed) + ' km/h'],
+    ['PUNTA', t.max_speed != null ? nf(t.max_speed) + ' km/h' : '—'], ['CONSUMO', l100 ? nf(l100, 1) + ' l/100' : '—'], ['COSTE', t.cost_eur != null ? nf(t.cost_eur, 2) + ' €' : '—']];
+  stats.forEach(([k, v], i) => {
+    const x = 80 + (i % 3) * 320, y = 980 + Math.floor(i / 3) * 150;
+    g.fillStyle = '#7d858f'; g.font = '600 24px "Chakra Petch", monospace'; g.fillText(k, x, y);
+    g.fillStyle = i === 3 ? '#ffd400' : '#f4f5f6'; g.font = '700 48px "Chakra Petch", monospace'; g.fillText(v, x, y + 60);
+  });
+  if (t.circuit) { g.fillStyle = '#ffd400'; g.font = '700 30px "Chakra Petch", monospace'; g.fillText('🏁 ' + t.circuit, 80, 1290); }
+  cv.toBlob(b => shareBlob(b, `trayecto-${t.id}.png`, 'Trayecto'), 'image/png');
 }
 
 function viewDatos() {
@@ -602,6 +671,8 @@ function viewDatos() {
       <span class="m" style="font-size:13px;color:#9aa2ab">${other} ${f['p' + other] ? nf(f['p' + other], 3) : 'no tiene'}</span></span></a>
     ${st[0] && f.price && st[0].id !== f.id ? `<p class="muted">${st[0].price < f.price ? `Ahora mismo la más barata cerca del coche es ${esc(st[0].name)} (${esc(st[0].town)}) a ${nf(st[0].price, 3)}: ${nf((f.price - st[0].price) * 40, 2)} € menos en 40 L.` : 'Sigue siendo de las más baratas de la zona.'}</p>` : ''}
     ${f.price && f.price < (fuel.avg || 9) ? `<p class="muted">Un depósito de 40 L ahí: ${nf(f.price * 40, 2)} € (media de la zona: ${nf(fuel.avg * 40, 2)} €).</p>` : ''}
+    ${favHist && favHist.history.filter(h => h['p' + cfg.fuel]).length > 2 ? `<span class="k">Precio de la ${cfg.fuel} · últimos días</span>${lineChart(favHist.history.filter(h => h['p' + cfg.fuel]).map(h => ({ ts: Date.parse(h.d), v: h['p' + cfg.fuel] })), 'v', { fmt: v => nf(v, 3), color: C.ac, label: 'Precio en tu gasolinera' })}` : `<p class="muted">Guardo su precio cada día a las 9:00 para enseñarte cómo evoluciona.</p>`}
+    <div class="row" style="gap:10px"><label for="favAlert" style="flex:1">Avísame si la ${cfg.fuel} baja de (€/L)<input id="favAlert" inputmode="decimal" placeholder="1,250" value="${favHist && favHist.alert ? nf(favHist.alert, 3) : ''}"></label><button class="btn sec" id="favAlertSave" style="align-self:flex-end">Guardar</button></div>
   </div>` : '';
   const stations = st.map((s, i) => `<div style="display:grid;grid-template-columns:1fr auto;align-items:center">
     <a class="li" href="https://maps.apple.com/?daddr=${s.lat},${s.lon}" style="grid-template-columns:1fr auto;color:inherit;text-decoration:none">
@@ -625,9 +696,28 @@ function viewDatos() {
     <div class="row" style="padding:12px 0"><span class="k">Gasolina ${cfg.fuel} cerca del coche</span>${fuel && fuel.date ? `<span style="font-size:11px;color:#7d858f">Ministerio · ${esc(String(fuel.date).slice(0, 16))}</span>` : ''}</div>
     ${stations || `<p class="muted" style="padding:0 0 12px">${esc(fuelErr || 'Cargando precios…')}</p>`}
   </div>
+  ${expensesCard()}
   <div class="pn" style="padding:4px 16px">
     <div class="row" style="padding:12px 0"><span class="k">Repostajes</span><button class="m" id="copyCsv" style="background:none;border:0;color:${C.ac};font-size:12px;font-weight:600;letter-spacing:.08em;min-height:36px">COPIAR CSV</button></div>
     ${rows}
+  </div>`;
+}
+
+function expensesCard() {
+  const e = expenses;
+  if (!e) return '';
+  const cats = Object.entries(e.by_cat).sort((a, b) => b[1] - a[1]);
+  const max = cats.length ? cats[0][1] : 1;
+  return `<div class="pn pad col" style="gap:12px">
+    <div class="row"><span class="k">Gastos del coche · ${e.year}</span><span class="m" style="font-size:22px;font-weight:700;color:${C.ac}">${nf(e.total, 2)} €</span></div>
+    <div class="g2" style="gap:8px">
+      <div class="col" style="gap:2px"><span class="k">Km este año</span><span class="m" style="font-size:18px;font-weight:700">${e.km ? nf(e.km) : '—'}</span></div>
+      <div class="col" style="gap:2px"><span class="k">Coste real por km</span><span class="m" style="font-size:18px;font-weight:700">${e.eur_km ? nf(e.eur_km * 100, 1) + ' cént.' : '—'}</span></div>
+    </div>
+    ${cats.map(([k, v]) => `<div class="col" style="gap:4px"><div class="row"><span style="font-size:14px">${esc(k)}</span><span class="m" style="font-size:14px;font-weight:700">${nf(v, 2)} €</span></div><div class="bar"><div style="width:${Math.round(v / max * 100)}%;background:${k === 'Gasolina' ? C.ac : C.blue}"></div></div></div>`).join('') || '<p class="muted">Sin gastos todavía este año.</p>'}
+    ${e.items.slice(0, 8).map(x => `<button class="li" data-expense="${esc(x.id)}" style="grid-template-columns:1fr auto"><span class="col" style="gap:2px"><span style="font-size:15px;font-weight:600">${esc(x.desc || x.cat)}</span><span style="font-size:12px;color:#7d858f">${esc(x.cat)} · ${new Date(x.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</span></span><span class="m" style="font-size:17px;font-weight:700">${nf(x.eur, 2)} €</span></button>`).join('')}
+    <button class="btn sec" data-expense="new">+ Añadir gasto (taller, seguro, ITV, neumáticos…)</button>
+    <p class="muted" style="margin:0">La gasolina se suma sola desde los repostajes con precio.</p>
   </div>`;
 }
 
@@ -712,7 +802,6 @@ function viewAjustes() {
          <div class="btns"><button class="btn" id="pushOn">${pushOn ? 'Volver a activar' : 'Activar avisos'}</button><button class="btn sec" id="pushTest">Enviar prueba</button></div>`
       : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
   </div>
-  <p class="muted" style="padding:0 4px;font-size:11px">Pantalla: ${innerHeight} · ${screen.width}×${screen.height} · ${standalone ? 'app' : 'navegador'} · ${getComputedStyle(document.documentElement).getPropertyValue('--app-h') || '—'} · cuerpo ${Math.round(document.body.getBoundingClientRect().height)}</p>
   <div class="pn pad col" style="gap:10px">
     <span class="k">Widget en la pantalla de inicio</span>
     <p class="muted">1. Instala la app gratuita <b>Scriptable</b> de la App Store.<br>2. Copia el código, abre Scriptable, toca + y pégalo.<br>3. Ejecútalo una vez: te pide la URL y la contraseña.<br>4. Mantén pulsado el escritorio → + → Scriptable → elige el script.</p>
@@ -794,6 +883,18 @@ function sheetHtml() {
       ${d.id ? '<button class="btn danger" type="button" id="dDelete">Quitar</button>' : ''}
     </form>`;
   }
+  if (sheet.type === 'expense') {
+    const x = sheet.item || {};
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">${x.id ? 'Editar gasto' : 'Nuevo gasto'}</span>
+      <label for="xCat">Tipo<select id="xCat" style="font:16px var(--body);background:#0b0d10;color:var(--tx);border:1px solid var(--ln);border-radius:10px;padding:12px">${(expenses ? expenses.cats : ['Otros']).map(c => `<option${c === (x.cat || 'Taller') ? ' selected' : ''}>${c}</option>`).join('')}</select></label>
+      <label for="xDesc">Concepto<input id="xDesc" value="${esc(x.desc || '')}" placeholder="Cambio de aceite y filtro"></label>
+      <div class="g2"><label for="xEur">Importe (€)<input id="xEur" inputmode="decimal" value="${x.eur != null ? nf(x.eur, 2) : ''}" placeholder="120,00"></label>
+      <label for="xDate">Fecha<input id="xDate" type="date" value="${esc(x.date || new Date().toISOString().slice(0, 10))}"></label></div>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
+      ${x.id ? '<button class="btn danger" type="button" id="xDelete">Borrar gasto</button>' : ''}
+    </form>`;
+  }
   if (sheet.type === 'tracknote') {
     const d = sheet.item;
     return `<form class="sheet" id="sheetForm">
@@ -823,23 +924,26 @@ function renderDrive() {
   const host = $('#driveHost');
   const c = live;
   const running = c && c.ignition !== 'off';
-  const show = c && (driveForced || (running && !driveDismissed));
+  const show = c && driveForced && running; // solo si la abres tú (los datos llegan cada pocos minutos)
   if (!show) { host.innerHTML = ''; return; }
   const night = c.location ? !sunUp(c.location.lat, c.location.lon) : (new Date().getHours() >= 19 || new Date().getHours() < 8);
   const wt = c.oil_c ?? c.coolant_c, hot = c.oil_c != null ? 80 : 85;
   const oilCol = wt >= hot ? 'var(--ok)' : wt >= 60 ? 'var(--wa)' : 'var(--blue)';
-  host.innerHTML = `<button id="drive" class="${night ? 'night' : ''}" aria-label="Salir del modo conducción">
-    <span class="row" style="width:100%"><span class="k" style="color:var(--ac);display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--ac)"></span>Modo conducción${night ? ' · noche' : ''}</span>
-      <span class="m" style="font-size:13px;color:#7d858f">${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}${c.outside_c != null ? ' · ' + nf(c.outside_c) + ' °C' : ''}</span></span>
-    <span style="width:100%;display:block;${night ? 'filter:saturate(.7) brightness(.8)' : ''}">${revBar(running ? c.rpm : 0, 32, 7000, 30)}</span>
-    <span class="col" style="flex:1;align-items:center;justify-content:center;width:100%">
-      <span class="big-speed">${running ? nf(c.speed_kmh) : '0'}</span><span class="k" style="font-size:14px">km/h</span></span>
-    <span style="display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:12px;width:100%">
-      <span class="col" style="gap:4px"><span class="k">${c.oil_c != null ? 'Aceite' : 'Motor'}</span><span class="m" style="font-size:40px;font-weight:700;color:${oilCol};line-height:1">${nf(wt)}°</span></span>
-      <span class="gear-box"><span class="m" style="font-size:92px;font-weight:700;line-height:.85">${running && c.gear ? c.gear : 'N'}</span><span class="m" style="font-size:11px;font-weight:700;letter-spacing:.14em">MARCHA</span></span>
-      <span class="col" style="gap:4px;align-items:flex-end"><span class="k">Régimen</span><span class="m" style="font-size:40px;font-weight:700;line-height:1">${running ? nf(c.rpm) : '—'}</span></span>
+  const tl = c.trip_live || {};
+  const ago2 = c.data_ts ? Math.round((Date.now() - c.data_ts) / 60e3) : null;
+  host.innerHTML = `<button id="drive" class="${night ? 'night' : ''}" aria-label="Salir de la pantalla del viaje">
+    <span class="row" style="width:100%"><span class="k" style="color:var(--ac);display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--ac)"></span>Viaje en curso${night ? ' · noche' : ''}</span>
+      <span class="m" style="font-size:13px;color:#7d858f">${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span></span>
+    <span class="col" style="flex:1;align-items:center;justify-content:center;width:100%;gap:6px">
+      <span class="big-speed" style="font-size:96px">${tl.km != null ? nf(tl.km) : '0'}</span><span class="k" style="font-size:14px">km recorridos · ${tl.mins != null ? clock(tl.mins * 60) : '—'}</span>
+      <span class="m" style="font-size:22px;font-weight:700;margin-top:14px">${tl.avg != null ? nf(tl.avg) + ' km/h de media' : ''}</span>
+      ${tl.fuel_l != null ? `<span class="m" style="font-size:16px;color:#9aa2ab">${nf(tl.fuel_l, 1)} L${tl.l100 ? ' · ' + nf(tl.l100, 1) + ' l/100' : ''}</span>` : ''}
     </span>
-    <span style="text-align:center;font-size:12px;color:#4b525a;width:100%">Toca para salir · se abre solo al arrancar</span>
+    <span style="display:grid;grid-template-columns:1fr 1fr;align-items:end;gap:12px;width:100%">
+      <span class="col" style="gap:4px"><span class="k">${c.oil_c != null ? 'Aceite' : 'Motor'}</span><span class="m" style="font-size:40px;font-weight:700;color:${oilCol};line-height:1">${nf(wt)}°</span><span style="font-size:12px;color:${oilCol}">${wt >= hot ? 'A temperatura' : wt >= 60 ? 'Calentando' : 'Frío: suave'}</span></span>
+      <span class="col" style="gap:4px;align-items:flex-end"><span class="k">Autonomía</span><span class="m" style="font-size:40px;font-weight:700;line-height:1">${nf(c.range_km)}</span><span style="font-size:12px;color:#7d858f">km · ${nf(c.fuel_pct)} %</span></span>
+    </span>
+    <span style="text-align:center;font-size:12px;color:#4b525a;width:100%">Dato del coche ${ago2 != null ? (ago2 < 1 ? 'ahora' : 'hace ' + ago2 + ' min') : ''} · toca para salir</span>
   </button>`;
   $('#drive').onclick = () => { driveDismissed = true; driveForced = false; renderDrive(); };
 }
@@ -932,6 +1036,13 @@ function afterRender() {
     if (!parking) { try { parking = await api('/api/parking'); } catch (e) { error = e.message; render(); return; } }
     sheet = { type: 'parking' }; render();
   };
+  document.querySelectorAll('[data-expense]').forEach(b => b.onclick = () => { sheet = { type: 'expense', item: b.dataset.expense === 'new' ? null : expenses.items.find(x => x.id === b.dataset.expense) }; render(); });
+  const fa = $('#favAlertSave'); if (fa) fa.onclick = async () => {
+    try { favHist = await api('/api/fuel/fav/alert', { method: 'POST', body: JSON.stringify({ limit: $('#favAlert').value }) }); flash(favHist.alert ? 'Te aviso si baja de ' + nf(favHist.alert, 3) : 'Aviso de precio quitado'); render(); }
+    catch (e) { error = e.message; render(); }
+  };
+  const gx = $('#gpxBtn'); if (gx) gx.onclick = () => exportGpx(tripDetail);
+  const ix = $('#imgBtn'); if (ix) ix.onclick = () => shareTripImage(tripDetail);
   document.querySelectorAll('[data-fav]').forEach(b => b.onclick = async e => {
     e.preventDefault();
     const s = JSON.parse(b.dataset.fav);
@@ -1053,6 +1164,9 @@ function bindSheet() {
       } else if (sheet.type === 'deadline') {
         deadlines = (await api('/api/deadlines', { method: 'POST', body: JSON.stringify({ id: sheet.item && sheet.item.id, name: $('#dName').value, date: $('#dDate').value }) })).items;
         sheet = null; flash('Fecha guardada');
+      } else if (sheet.type === 'expense') {
+        expenses = await api('/api/expenses', { method: 'POST', body: JSON.stringify({ id: sheet.item && sheet.item.id, cat: $('#xCat').value, desc: $('#xDesc').value, eur: $('#xEur').value, date: $('#xDate').value }) });
+        sheet = null; flash('Gasto guardado');
       } else if (sheet.type === 'tracknote') {
         await api('/api/trackdays/note', { method: 'POST', body: JSON.stringify({ day: sheet.item.day, circuit: sheet.item.circuit, note: $('#tnNote').value }) });
         trackdays = (await api('/api/trackdays')).days; sheet = null; flash('Notas guardadas');
@@ -1088,6 +1202,10 @@ function bindSheet() {
     if (!name) return;
     try { places = (await api('/api/places', { method: 'POST', body: JSON.stringify({ name }) })).places; loaded.trips = 0; flash('Lugar guardado: ' + name); }
     catch (e) { error = e.message; render(); }
+  };
+  const xd = $('#xDelete'); if (xd) xd.onclick = async () => {
+    try { expenses = await api('/api/expenses', { method: 'POST', body: JSON.stringify({ delete: sheet.item.id }) }); sheet = null; flash('Gasto borrado'); }
+    catch (e) { error = e.message; sheet = null; render(); }
   };
   const dd = $('#dDelete'); if (dd) dd.onclick = async () => {
     try { deadlines = (await api('/api/deadlines/' + encodeURIComponent(sheet.item.id), { method: 'DELETE' })).items; sheet = null; flash('Fecha quitada'); }
