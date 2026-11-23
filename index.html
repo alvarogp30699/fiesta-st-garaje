@@ -131,7 +131,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -182,7 +182,7 @@ async function loadFor(t, force) {
     try { fuel = await api('/api/fuel?type=' + cfg.fuel); fuelErr = null; } catch (e) { fuelErr = e.message; }
   });
   if (t === 'viajes') {
-    add('trips', 60e3, async () => { trips = (await api('/api/trips?limit=60')).trips; });
+    add('trips', 60e3, async () => { const r = await api('/api/trips?limit=60'); trips = r.trips; commute = r.commute; places = r.places || []; });
     add('records', 300e3, async () => { records = await api('/api/trips/records'); });
     add('circuits', 300e3, async () => { const r = await api('/api/circuits'); circuits = r.circuits; customCircuits = r.custom || []; });
   }
@@ -484,6 +484,13 @@ function viewViajes() {
         <div class="col" style="gap:2px"><span class="k">Rpm máx.</span><span class="m" style="font-size:20px;font-weight:700">${nf(ci.top_rpm)}</span></div>
         <div class="col" style="gap:2px"><span class="k">En pista</span><span class="m" style="font-size:20px;font-weight:700">${nf(ci.km)} km</span></div>
       </div></div>`).join('');
+  if (commute && commute.length) html += commute.slice(0, 2).map(c => `<div class="pn pad col" style="gap:10px">
+    <div class="row"><span class="k">${esc(c.route)}</span><span style="font-size:12px;color:#7d858f">${c.count} trayecto${c.count > 1 ? 's' : ''}</span></div>
+    <div class="g3" style="gap:8px">
+      <div class="col" style="gap:2px"><span class="k">Media</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.avg_min)} <span style="font-size:12px;color:#7d858f">min</span></span></div>
+      <div class="col" style="gap:2px"><span class="k">Mejor</span><span class="m" style="font-size:20px;font-weight:700;color:${C.ac}">${nf(c.best_min)} <span style="font-size:12px;color:#7d858f">min</span></span></div>
+      <div class="col" style="gap:2px"><span class="k">Coste</span><span class="m" style="font-size:20px;font-weight:700">${c.avg_cost != null ? nf(c.avg_cost, 2) : '—'} <span style="font-size:12px;color:#7d858f">€</span></span></div>
+    </div></div>`).join('');
   if (trackdays && trackdays.length) html += `<div class="k" style="padding:6px 2px 0">Días de circuito</div>` + trackdays.map((d, i) => `
     <div class="pn pad col" style="gap:10px">
       <div class="row"><span style="font-size:15px;font-weight:600">${esc(d.circuit)}</span><span style="font-size:12px;color:#7d858f">${new Date(d.day).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
@@ -505,7 +512,7 @@ function viewViajes() {
     if (d !== day) { flush(); day = d; group = ''; }
     group += `<button class="li" data-trip="${t.id}" style="grid-template-columns:34px 1fr 92px">
       <span class="m" style="font-size:13px;color:#7d858f;font-weight:600">#${pad2(t.id)}</span>
-      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${hm(t.start_ts)} → ${hm(t.end_ts)}${t.track ? ` <span class="tag" style="color:${C.ac};border-color:#4a4210;font-size:10px">${t.circuit ? '🏁 ' + esc(t.circuit.replace('Circuito de ', '')) : 'Circuito'}</span>` : ''}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)}${t.max_speed != null ? ' · máx. ' + nf(t.max_speed) : ''}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
+      <span class="col" style="gap:2px"><span class="m" style="font-size:16px;font-weight:600">${t.from || t.to ? `${esc(t.from || '…')} → ${esc(t.to || '…')} <span style="font-size:12px;color:#7d858f;font-weight:500">${hm(t.start_ts)}</span>` : `${hm(t.start_ts)} → ${hm(t.end_ts)}`}${t.track ? ` <span class="tag" style="color:${C.ac};border-color:#4a4210;font-size:10px">${t.circuit ? '🏁 ' + esc(t.circuit.replace('Circuito de ', '')) : 'Circuito'}</span>` : ''}</span><span style="font-size:12px;color:#7d858f">Media ${nf(t.avg_speed)}${t.max_speed != null ? ' · máx. ' + nf(t.max_speed) : ''}${t.cost_eur != null ? ' · ' + nf(t.cost_eur, 2) + ' €' : ''}</span></span>
       <span class="col" style="gap:4px;align-items:flex-end"><span class="m" style="font-size:18px;font-weight:700">${nf(t.km, 1)} km</span>${spark(t.spark)}</span>
     </button>`;
   }
@@ -760,6 +767,8 @@ function sheetHtml() {
       <span class="k">Avisarme antes de que acabe la zona azul${left != null ? ` · quedan ${left} min` : ''}</span>
       <div class="g3">${[30, 60, 90, 120, 180].map(m => `<button type="button" class="btn sec" data-min="${m}" style="min-height:44px">${m < 60 ? m + ' min' : nf(m / 60, m % 60 ? 1 : 0) + ' h'}</button>`).join('')}<button type="button" class="btn danger" data-min="0" style="min-height:44px">Quitar</button></div>
       <p class="muted">Te aviso 10 minutos antes de que se acabe el tiempo.</p>
+      <button type="button" class="btn sec" id="pPlace">📍 Guardar este sitio como lugar (Casa, Trabajo…)</button>
+      ${places.length ? `<p class="muted">Lugares: ${places.map(p => esc(p.name)).join(' · ')}</p>` : ''}
       <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Guardar nota</button></div>
     </form>`;
   }
@@ -842,7 +851,7 @@ function renderBadge() {
     : live.locked === false ? `<span class="chip" style="color:${C.bad}"><i></i>Abierto</span>` : `<span class="chip" style="color:${C.ok}"><i></i>Cerrado</span>`;
   const src = live && live.source === 'mock' ? `<span class="chip" style="color:${C.wa}">Prueba</span>` : '';
   $('#badge').innerHTML = tab === 'ajustes' ? '' : tab === 'estado' ? state : src;
-  const [sub, title] = tripDetail && tab === 'viajes' ? [`${dayLabel(tripDetail.start_ts)} · ${hm(tripDetail.start_ts)} → ${hm(tripDetail.end_ts)}`, `TRAYECTO #${pad2(tripDetail.id)}`] : TITLES[tab];
+  const [sub, title] = tripDetail && tab === 'viajes' ? [`${dayLabel(tripDetail.start_ts)} · ${hm(tripDetail.start_ts)} → ${hm(tripDetail.end_ts)}`, (tripDetail.from || tripDetail.to ? `${(tripDetail.from || '…').toUpperCase()} → ${(tripDetail.to || '…').toUpperCase()}` : `TRAYECTO #${pad2(tripDetail.id)}`)] : TITLES[tab];
   $('#hSub').textContent = sub; $('#hTitle').textContent = title;
 }
 
@@ -1073,6 +1082,12 @@ function bindSheet() {
       sheet = null; flash(+b.dataset.min ? `Te aviso 10 minutos antes de que pasen ${b.textContent.trim()}` : 'Temporizador quitado');
     } catch (e) { error = e.message; sheet = null; render(); }
   });
+  const pp = $('#pPlace'); if (pp) pp.onclick = async () => {
+    const name = prompt('Nombre del lugar (se guarda donde está aparcado el coche):', places.length ? '' : 'Casa');
+    if (!name) return;
+    try { places = (await api('/api/places', { method: 'POST', body: JSON.stringify({ name }) })).places; loaded.trips = 0; flash('Lugar guardado: ' + name); }
+    catch (e) { error = e.message; render(); }
+  };
   const dd = $('#dDelete'); if (dd) dd.onclick = async () => {
     try { deadlines = (await api('/api/deadlines/' + encodeURIComponent(sheet.item.id), { method: 'DELETE' })).items; sheet = null; flash('Fecha quitada'); }
     catch (e) { error = e.message; sheet = null; render(); }

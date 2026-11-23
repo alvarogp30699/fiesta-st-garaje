@@ -96,6 +96,8 @@ export default {
       if (m === 'POST' && p === '/api/deadlines') return json(await saveDeadline(env, await req.json()));
       if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
+      if (m === 'GET' && p === '/api/places') return json({ places: await getPlaces(env) });
+      if (m === 'POST' && p === '/api/places') return json(await savePlace(env, await req.json()));
       if (m === 'GET' && p === '/api/tyres') return json(await getTyrePrefs(env));
       if (m === 'POST' && p === '/api/tyres') return json(await setTyrePrefs(env, await req.json()));
       if (m === 'GET' && p === '/api/guard') return json(await getGuard(env));
@@ -859,9 +861,14 @@ async function listTrips(env, limit) {
      track, circuit, points FROM trips ORDER BY start_ts DESC LIMIT ?`
   ).bind(limit).all();
   const price = await priceFinder(env);
+  const places = await getPlaces(env);
   return {
+    places,
+    commute: commuteStats(results, places, price),
     trips: results.map(({ points, ...t }) => {
-      const sp = JSON.parse(points || '[]').map(p => p[2]);
+      const pp = JSON.parse(points || '[]');
+      Object.assign(t, tripPlaces(pp, places));
+      const sp = pp.map(p => p[2]);
       const n = 16, spark = [];
       if (sp.length > 1) for (let i = 0; i < n; i++) spark.push(sp[Math.round(i * (sp.length - 1) / (n - 1))]);
       return { ...t, spark, cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null };
@@ -884,7 +891,8 @@ async function getTrip(env, id) {
   }
   const price = await priceFinder(env);
   if (route) route.avg_cost_eur = r2(route.avg_l100 != null ? route.avg_l100 / 100 * t.km * price(t.start_ts) : null);
-  return { ...t, points: JSON.parse(t.points || '[]'), route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+  const pts0 = JSON.parse(t.points || '[]');
+  return { ...t, ...tripPlaces(pts0, await getPlaces(env)), points: pts0, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
 }
 
 const r2 = v => v == null ? null : Math.round(v * 100) / 100;
@@ -981,6 +989,59 @@ async function addCustomCircuit(env, b) {
 async function delCustomCircuit(env, id) {
   CUSTOM_CIRCUITS = CUSTOM_CIRCUITS.filter(c => c.id !== id);
   return saveCustom(env);
+}
+
+// ---------- Lugares guardados (Casa, Trabajo…) ----------
+async function getPlaces(env) {
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'places'").first();
+  return row ? JSON.parse(row.v) : [];
+}
+
+async function savePlace(env, b) {
+  let list = await getPlaces(env);
+  const name = String(b.name || '').trim().slice(0, 30);
+  if (b.delete) list = list.filter(p => p.name !== b.delete);
+  else {
+    if (!name) throw httpError('Ponle un nombre', 400);
+    let lat = Number(b.lat), lon = Number(b.lon);
+    if (isNaN(lat) || isNaN(lon)) { const c = await readCar(env); if (!c.location) throw httpError('No hay ubicación del coche', 400); lat = c.location.lat; lon = c.location.lon; }
+    list = list.filter(p => p.name.toLowerCase() !== name.toLowerCase());
+    list.push({ name, lat: round(lat, 5), lon: round(lon, 5), r: 0.4 });
+  }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('places', ?)").bind(JSON.stringify(list)).run();
+  return { places: list };
+}
+
+function placeAt(lat, lon, places) {
+  if (lat == null) return null;
+  let best = null, bd = 1e9;
+  for (const p of places) { const d = distKm(lat, lon, p.lat, p.lon); if (d <= (p.r || 0.4) && d < bd) { bd = d; best = p.name; } }
+  return best;
+}
+
+function tripPlaces(pts, places) {
+  if (!pts.length || !places.length) return { from: null, to: null };
+  const a = pts[0], b = pts[pts.length - 1];
+  return { from: placeAt(a[0], a[1], places), to: placeAt(b[0], b[1], places) };
+}
+
+// Ida y vuelta entre dos lugares guardados (p. ej. Casa ↔ Trabajo): media de tiempo, km y coste
+function commuteStats(rows, places, price) {
+  if (places.length < 2) return null;
+  const groups = {};
+  for (const t of rows) {
+    const { from, to } = tripPlaces(JSON.parse(t.points || '[]'), places);
+    if (!from || !to || from === to) continue;
+    const k = [from, to].sort().join(' ↔ ');
+    (groups[k] = groups[k] || []).push(t);
+  }
+  return Object.entries(groups).map(([route, ts]) => ({
+    route, count: ts.length,
+    avg_min: Math.round(ts.reduce((a, t) => a + t.duration_s, 0) / ts.length / 60),
+    best_min: Math.round(Math.min(...ts.map(t => t.duration_s)) / 60),
+    avg_km: round(ts.reduce((a, t) => a + t.km, 0) / ts.length, 1),
+    avg_cost: (() => { const c = ts.filter(t => t.fuel_used_l != null && t.km >= 3); return c.length ? round(c.reduce((a, t) => a + t.fuel_used_l * price(t.start_ts), 0) / c.length, 2) : null; })()
+  })).sort((a, b) => b.count - a.count);
 }
 
 // ---------- Frenos: el circuito desgasta más ----------
