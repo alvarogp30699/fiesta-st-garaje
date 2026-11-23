@@ -1816,6 +1816,7 @@ async function getTyreSet(env) {
     if (tr.length >= 2 && last.km - tr[0].km >= 2000) rate = (minOf(tr[0]) - lastMin) / ((last.km - tr[0].km) / 1000);
     if (!(rate > 0) && last.km - t.mounted_km >= 2000) rate = (newMm - lastMin) / ((last.km - t.mounted_km) / 1000);
     out.tread_last = { ...last, min: lastMin };
+    out.tread_prev = tr.length >= 2 ? tr[tr.length - 2] : null;
     out.new_mm = newMm;
     // Cómo se gastan: centro (presión alta), hombros (presión baja) o un lado (alineación/caída)
     const NAMES = { fl: 'delantera izq.', fr: 'delantera der.', rl: 'trasera izq.', rr: 'trasera der.' };
