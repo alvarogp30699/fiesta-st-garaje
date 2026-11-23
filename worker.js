@@ -1805,9 +1805,32 @@ async function getTyreSet(env) {
   // Vida orientativa: semi-slick (SuperSport R/RS, Cup, Trofeo) ~20.000 km; deportivo de calle como la SuperSport ~35.000 km;
   // cada km de circuito gasta como ~8 de carretera. Se puede fijar a mano con life_km.
   out.life_km = t.life_km || (/supersport\s*rs?\b|cup|trofeo|semi/i.test(t.model || '') ? 20000 : /supersport|pilot sport 4|ps4|p zero/i.test(t.model || '') ? 35000 : 40000);
-  if (out.km != null) {
+  // Con medidas del dibujo se calcula el desgaste real (la rueda más gastada manda). Nuevas: ~7 mm; mínimo legal 1,6 mm.
+  const tr = (t.tread || []).filter(x => x.km != null);
+  if (tr.length && t.mounted_km != null) {
+    const minOf = x => Math.min(...['fl', 'fr', 'rl', 'rr'].map(k => x[k]).filter(v => v != null));
+    const last = tr[tr.length - 1], lastMin = minOf(last);
+    const newMm = t.new_mm || 7;
+    let rate = null; // mm por cada 1.000 km
+    if (tr.length >= 2 && last.km - tr[0].km >= 2000) rate = (minOf(tr[0]) - lastMin) / ((last.km - tr[0].km) / 1000);
+    if (!(rate > 0) && last.km - t.mounted_km >= 2000) rate = (newMm - lastMin) / ((last.km - t.mounted_km) / 1000);
+    out.tread_last = { ...last, min: lastMin };
+    out.tread_rate = rate > 0 ? round(rate, 2) : null;
+    if (rate > 0) {
+      const sinceKm = odo != null ? odo - last.km : 0;
+      const nowMm = Math.max(0, lastMin - rate * sinceKm / 1000);
+      out.tread_now = round(nowMm, 1);
+      out.left_km = Math.max(0, Math.round((nowMm - 1.6) / rate * 1000));
+      out.left_3mm_km = Math.max(0, Math.round((nowMm - 3) / rate * 1000));
+      out.life_km = Math.round((newMm - 1.6) / rate * 1000);
+      out.from_tread = true;
+    }
+  }
+  if (out.km != null && !out.from_tread) {
     const used = out.km + (out.track_km || 0) * 7;
     out.left_km = Math.max(0, Math.round(out.life_km - used));
+  }
+  if (out.left_km != null) {
     const kpd = await kmPerDay(env);
     out.eta = kpd > 1 ? etaDate(out.left_km / kpd) : null;
   }
@@ -1819,7 +1842,14 @@ async function setTyreSet(env, b) {
   const t = row ? JSON.parse(row.v) : {};
   const n = v => (v === '' || v == null || isNaN(Number(String(v).replace(/\./g, '').replace(',', '.'))) ? null : Math.round(Number(String(v).replace(/\./g, '').replace(',', '.'))));
   if (b.rotated) t.rotated_km = await currentOdo(env);
-  else {
+  else if (b.tread) {
+    // Medida del dibujo en mm de cada rueda (con medidor o con una moneda de 1 €)
+    const mm = v => { const x = Number(String(v ?? '').replace(',', '.')); return x > 0.5 && x < 12 ? round(x, 1) : null; };
+    const m = { date: new Date(Date.now() + 3600e3).toISOString().slice(0, 10), km: await currentOdo(env), fl: mm(b.tread.fl), fr: mm(b.tread.fr), rl: mm(b.tread.rl), rr: mm(b.tread.rr) };
+    if (![m.fl, m.fr, m.rl, m.rr].some(x => x != null)) throw httpError('Pon al menos una medida en mm', 400);
+    t.tread = [...(t.tread || []).filter(x => x.date !== m.date), m].slice(-20);
+    if (b.new_mm) t.new_mm = mm(b.new_mm);
+  } else {
     t.model = String(b.model || '').trim().slice(0, 60) || null;
     t.size = String(b.size || '').trim().slice(0, 30) || null;
     t.mounted_date = /^\d{4}-\d{2}-\d{2}$/.test(b.mounted_date || '') ? b.mounted_date : null;

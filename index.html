@@ -828,9 +828,12 @@ function tyreCard() {
       <div class="col" style="gap:2px"><span class="k">Días pista</span><span class="m" style="font-size:20px;font-weight:700">${nf(t.track_days)}</span></div>
     </div>
     ${t.left_km != null ? `<div class="col" style="gap:4px"><div style="height:8px;border-radius:4px;background:#1d2126;overflow:hidden"><div style="height:100%;width:${Math.round(t.left_km / t.life_km * 100)}%;background:${t.left_km < 3000 ? C.wa : C.ok}"></div></div>
-      <span style="font-size:12px;color:#7d858f">Les quedan unos ${nf(t.left_km)} km de ${nf(t.life_km)} orientativos${t.eta ? ' · cambio ≈ ' + new Date(t.eta).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : ''}. Cada km en circuito cuenta como 8. Mira siempre el testigo de desgaste.</span></div>`
+      <span style="font-size:12px;color:#7d858f">${t.from_tread
+        ? `Dibujo ≈ ${nf(t.tread_now, 1)} mm (gastan ${nf(t.tread_rate, 2)} mm cada 1.000 km). Les quedan unos ${nf(t.left_km)} km hasta 1,6 mm${t.left_3mm_km != null ? ` (${nf(t.left_3mm_km)} km hasta 3 mm, cuando ya agarran peor en mojado)` : ''}${t.eta ? ' · cambio ≈ ' + new Date(t.eta).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : ''}.`
+        : `Les quedan unos ${nf(t.left_km)} km de ${nf(t.life_km)} orientativos${t.eta ? ' · cambio ≈ ' + new Date(t.eta).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : ''}. Cada km en circuito cuenta como 8. Mide el dibujo para afinarlo.`}</span></div>`
       : `<span style="font-size:12px;color:${C.ac}">Pon los km a los que las montaste (Editar) y te calculo cuánto les queda.</span>`}
-    <div class="btns"><button class="btn sec" data-tyrerot>Rotadas hoy</button><button class="btn sec" data-tyreset>Editar</button></div>
+    ${t.tread_last ? `<span style="font-size:12px;color:#7d858f">Última medida (${new Date(t.tread_last.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}): del. ${nf(t.tread_last.fl, 1)} / ${nf(t.tread_last.fr, 1)} · tras. ${nf(t.tread_last.rl, 1)} / ${nf(t.tread_last.rr, 1)} mm</span>` : ''}
+    <div class="btns"><button class="btn sec" data-tyrerot>Rotadas hoy</button><button class="btn sec" data-tread>Medir dibujo</button><button class="btn sec" data-tyreset>Editar</button></div>
   </div>`;
 }
 
@@ -964,6 +967,16 @@ function sheetHtml() {
       <button type="button" class="btn sec" id="pPlace">📍 Guardar este sitio como lugar (Casa, Trabajo…)</button>
       ${places.length ? `<p class="muted">Lugares: ${places.map(p => esc(p.name)).join(' · ')}</p>` : ''}
       <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Guardar nota</button></div>
+    </form>`;
+  }
+  if (sheet.type === 'tread') {
+    const l = (tyreSet && tyreSet.tread_last) || {};
+    const f = (id, lab, v) => `<label for="${id}">${lab}<input id="${id}" inputmode="decimal" placeholder="${v != null ? nf(v, 1) : '6,0'}"></label>`;
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">Profundidad del dibujo (mm)</span>
+      <div class="g2">${f('trFl', 'Delantera izq.', l.fl)}${f('trFr', 'Delantera der.', l.fr)}${f('trRl', 'Trasera izq.', l.rl)}${f('trRr', 'Trasera der.', l.rr)}</div>
+      <p class="muted">Mide en el surco central, por la parte más gastada. Sin medidor: mete una moneda de 1 € en el surco; si se ve entera la franja dorada exterior, quedan menos de ~3 mm. Con dos medidas separadas unos miles de km, el cálculo es exacto.</p>
+      <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
     </form>`;
   }
   if (sheet.type === 'tyreset') {
@@ -1160,6 +1173,7 @@ function afterRender() {
     catch (err) { error = err.message; render(); }
   });
   document.querySelectorAll('[data-tyreset]').forEach(b => b.onclick = () => { sheet = { type: 'tyreset' }; render(); });
+  document.querySelectorAll('[data-tread]').forEach(b => b.onclick = () => { sheet = { type: 'tread' }; render(); });
   document.querySelectorAll('[data-tyrerot]').forEach(b => b.onclick = async () => {
     try { tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ rotated: true }) }); flash('Rotación apuntada'); render(); } catch (e) { error = e.message; render(); }
   });
@@ -1322,7 +1336,10 @@ function bindSheet() {
     e.preventDefault();
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
-      if (sheet.type === 'tyreset') {
+      if (sheet.type === 'tread') {
+        tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ tread: { fl: $('#trFl').value, fr: $('#trFr').value, rl: $('#trRl').value, rr: $('#trRr').value } }) });
+        sheet = null; flash('Medida guardada');
+      } else if (sheet.type === 'tyreset') {
         tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ model: $('#tyModel').value, size: $('#tySize').value, mounted_date: $('#tyDate').value, mounted_km: $('#tyKm').value }) });
         sheet = null; flash('Neumáticos guardados');
       } else if (sheet.type === 'deadline') {
