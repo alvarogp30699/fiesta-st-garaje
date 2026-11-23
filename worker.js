@@ -1471,7 +1471,19 @@ async function geoName(env, lat, lon) {
       if (j.name && j.category !== 'highway' && j.category !== 'building' && j.category !== 'place' && j.name !== road) poi = j.name;
     } else failed = true;
   } catch (e) { failed = true; }
+  // Comercio o sitio con nombre más cercano (capa de puntos de interés de Nominatim)
   try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&layer=poi&zoom=18&addressdetails=1&lat=${lat}&lon=${lon}`, { headers: UA });
+    if (r.ok) {
+      const j = await r.json();
+      const d = j.lat ? distKm(lat, lon, Number(j.lat), Number(j.lon)) : 9;
+      if (j.name && d <= 0.09 && !POI_SKIP.test(j.type || '')) poi = j.name;
+      else if (!j.name && j.error == null) geoDebug(env, 'poi sin nombre ' + (j.type || '') + ' ' + round(d * 1000) + 'm');
+      else if (j.name) geoDebug(env, 'poi lejos ' + j.name + ' ' + round(d * 1000) + 'm');
+    } else geoDebug(env, 'poi HTTP ' + r.status);
+  } catch (e) { geoDebug(env, 'poi ' + e.message); }
+  // Si no hay, Overpass (todos los comercios a menos de 70 m)
+  if (!poi) try {
     const q = `[out:json][timeout:8];(nwr(around:70,${lat},${lon})["name"]["shop"];nwr(around:70,${lat},${lon})["name"]["amenity"];nwr(around:70,${lat},${lon})["name"]["tourism"];nwr(around:70,${lat},${lon})["name"]["leisure"];);out center tags 30;`;
     const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { ...UA, 'content-type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) });
     if (r.ok) {
@@ -1481,15 +1493,18 @@ async function geoName(env, lat, lon) {
         .map(e => { const la = e.lat ?? e.center?.lat, lo = e.lon ?? e.center?.lon; return { n: e.tags.brand && !e.tags.name.includes(e.tags.brand) ? e.tags.brand : e.tags.name, d: la != null ? distKm(lat, lon, la, lo) : 1, shop: !!e.tags.shop }; })
         .sort((x, y) => (x.d - (x.shop ? 0.02 : 0)) - (y.d - (y.shop ? 0.02 : 0)))[0];
       if (best) poi = best.n;
-    }
-  } catch (e) { /* sin Overpass: queda lo de Nominatim */ }
+    } else geoDebug(env, 'overpass HTTP ' + r.status);
+  } catch (e) { geoDebug(env, 'overpass ' + e.message); }
   let name = poi ? (town && !poi.toLowerCase().includes(town.toLowerCase()) ? `${poi} ${town}` : poi)
     : road ? (town ? `${road}, ${town}` : road) : town;
   if (!name && failed) return null; // reintentar más tarde
   name = name ? String(name).slice(0, 60) : null;
   await env.DB.prepare('INSERT OR REPLACE INTO geo VALUES (?, ?, ?)').bind(k, name, Date.now()).run();
+  if (GEO_DBG.length) { await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('geo_dbg', ?)").bind(JSON.stringify({ k, m: GEO_DBG.slice(-6) })).run(); GEO_DBG = []; }
   return name;
 }
+let GEO_DBG = [];
+function geoDebug(env, m) { GEO_DBG.push(m); }
 async function geoCached(env, pairs) {
   const keys = [...new Set(pairs.filter(p => p && p[0] != null).map(p => geoKey(p[0], p[1])))];
   const out = {};
