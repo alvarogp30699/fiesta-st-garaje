@@ -1065,32 +1065,51 @@ async function getTrip(env, id) {
   return { ...t, ...tripPlaces(pts0, await getPlaces(env)), points: pts0, path, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
 }
 
-// Trayecto con pocas lecturas (huecos de más de 3 min): se calcula la ruta por carretera entre ellas
-// para que el mapa no sea una línea recta. Se guarda para no pedirla otra vez.
+// Ruta por carretera: el coche solo manda un punto cada ~2 min, así que se calcula el camino real
+// entre cada par de puntos (OSRM) y cada tramo conserva su velocidad. Se guarda para no pedirla otra vez.
 function sparseTrip(pts) {
   if (pts.length < 2) return false;
   for (let i = 1; i < pts.length; i++) if ((pts[i][3] || 0) - (pts[i - 1][3] || 0) > 180e3 && distKm(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) > 0.5) return true;
   return false;
 }
 async function tripPath(env, t, pts) {
-  if (t.path) { try { return JSON.parse(t.path); } catch (e) { return null; } }
-  if (t.circuit || t.track || !sparseTrip(pts)) return null;
-  let way = pts.filter((p, i) => i === 0 || i === pts.length - 1 || distKm(p[0], p[1], pts[i - 1][0], pts[i - 1][1]) > 0.3);
-  if (way.length > 25) { const k = (way.length - 1) / 24; way = Array.from({ length: 25 }, (_, i) => way[Math.round(i * k)]); }
+  if (t.path) { try { const p = JSON.parse(t.path); if (p && p.legs) return p; } catch (e) {} }
+  if (t.circuit || t.track || pts.length < 2) return null;
+  // Puntos de paso: se saltan los que están a menos de 150 m del anterior (parado en un semáforo, etc.)
+  let way = pts.filter((p, i) => i === 0 || i === pts.length - 1 || distKm(p[0], p[1], pts[i - 1][0], pts[i - 1][1]) > 0.15);
+  if (way.length < 2) return null;
+  if (way.length > 60) { const k = (way.length - 1) / 59; way = Array.from({ length: 60 }, (_, i) => way[Math.round(i * k)]); }
   try {
-    const url = 'https://router.project-osrm.org/route/v1/driving/' + way.map(p => p[1].toFixed(5) + ',' + p[0].toFixed(5)).join(';') + '?overview=full&geometries=geojson';
-    const r = await fetch(url, { headers: { 'user-agent': 'fiesta-st-garaje (uso personal)' }, cf: { cacheTtl: 86400 } });
-    if (!r.ok) return null;
+    const url = 'https://router.project-osrm.org/route/v1/driving/' + way.map(p => p[1].toFixed(5) + ',' + p[0].toFixed(5)).join(';') +
+      '?overview=false&steps=true&geometries=geojson&continue_straight=false';
+    const r = await fetch(url, { headers: { 'user-agent': 'fiesta-st-garaje (uso personal)' } });
+    if (!r.ok) { await routeErr(env, t.id, 'HTTP ' + r.status); return null; }
     const j = await r.json();
-    const co = j.routes && j.routes[0] && j.routes[0].geometry && j.routes[0].geometry.coordinates;
-    if (!co || co.length < 2) return null;
-    // Si la ruta sale mucho más larga que los km del odómetro, no es la que hiciste
-    const km = j.routes[0].distance / 1000;
-    if (t.km && (km > t.km * 1.6 + 1 || km < t.km * 0.5 - 1)) return null;
-    const path = co.map(c => [round(c[1], 5), round(c[0], 5)]).filter((p, i, a) => i === 0 || i === a.length - 1 || i % 2 === 0 || a.length < 400);
+    const route = j.routes && j.routes[0];
+    if (!route || !route.legs || route.legs.length !== way.length - 1) { await routeErr(env, t.id, 'sin ruta ' + (j.code || '')); return null; }
+    // Si sale mucho más larga o corta que los km del cuentakilómetros, no es la que hiciste
+    const km = route.distance / 1000;
+    if (t.km && (km > t.km * 1.4 + 1 || km < t.km * 0.6 - 1)) { await routeErr(env, t.id, 'km ' + round(km, 1) + ' vs ' + t.km); return null; }
+    const legs = route.legs.map((lg, i) => {
+      const c = [];
+      for (const st of lg.steps || []) for (const q of (st.geometry && st.geometry.coordinates) || []) {
+        const pt = [round(q[1], 5), round(q[0], 5)];
+        const l = c[c.length - 1];
+        if (!l || l[0] !== pt[0] || l[1] !== pt[1]) c.push(pt);
+      }
+      if (!c.length) c.push([way[i][0], way[i][1]], [way[i + 1][0], way[i + 1][1]]);
+      // velocidad del tramo: la media de sus dos extremos (si el coche la mandó)
+      const s0 = way[i][2], s1 = way[i + 1][2];
+      return { s: s0 == null && s1 == null ? null : Math.round(((s0 || 0) + (s1 || 0)) / ((s0 != null) + (s1 != null))), c };
+    });
+    const path = { sparse: sparseTrip(pts), km: round(km, 1), legs };
     await env.DB.prepare('UPDATE trips SET path = ? WHERE id = ?').bind(JSON.stringify(path), t.id).run();
     return path;
-  } catch (e) { console.error('ruta', e); return null; }
+  } catch (e) { await routeErr(env, t.id, String(e && e.message || e)); return null; }
+}
+async function routeErr(env, id, msg) {
+  console.error('ruta', id, msg);
+  try { await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('route_err', ?)").bind(JSON.stringify({ id, msg, at: Date.now() })).run(); } catch (e) {}
 }
 
 const r2 = v => v == null ? null : Math.round(v * 100) / 100;
