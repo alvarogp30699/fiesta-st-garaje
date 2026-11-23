@@ -163,6 +163,7 @@ export default {
     }
     await parkingTimer(env);
     await daily(env, event.scheduledTime);
+    try { await geoBackfill(env); } catch (e) { console.error('geo', e); }
     try { await weeklyBackup(env, event.scheduledTime); } catch (e) { console.error('copia', e); }
   }
 };
@@ -810,6 +811,7 @@ async function prepare(env) {
   try { await db.prepare('ALTER TABLE refuels ADD COLUMN price_l REAL').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE refuels ADD COLUMN photo INTEGER').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE trips ADD COLUMN path TEXT').run(); } catch (e) { /* ya existe */ }
+  await db.prepare('CREATE TABLE IF NOT EXISTS geo (k TEXT PRIMARY KEY, name TEXT, at INTEGER)').run();
   const mc = await db.prepare('SELECT COUNT(*) AS n FROM maintenance').first();
   if (!mc.n) {
     await db.batch(DEFAULT_MAINT.map(([n, km, mo]) =>
@@ -1033,12 +1035,19 @@ async function listTrips(env, limit) {
   ).bind(limit).all();
   const price = await priceFinder(env);
   const places = await getPlaces(env);
+  const parsed = results.map(r => JSON.parse(r.points || '[]'));
+  const gc = await geoCached(env, parsed.flatMap(pp => pp.length ? [pp[0], pp[pp.length - 1]] : []));
   return {
     places,
     commute: commuteStats(results, places, price),
-    trips: results.map(({ points, ...t }) => {
-      const pp = JSON.parse(points || '[]');
+    trips: results.map(({ points, ...t }, i) => {
+      const pp = parsed[i];
       Object.assign(t, tripPlaces(pp, places));
+      if (pp.length && !t.circuit) {
+        const a = pp[0], b = pp[pp.length - 1];
+        if (!t.from) t.from = gc[geoKey(a[0], a[1])] || null;
+        if (!t.to) t.to = gc[geoKey(b[0], b[1])] || null;
+      }
       const sp = pp.map(p => p[2]);
       const n = 16, spark = [];
       if (sp.length > 1) for (let i = 0; i < n; i++) spark.push(sp[Math.round(i * (sp.length - 1) / (n - 1))]);
@@ -1064,9 +1073,15 @@ async function getTrip(env, id) {
   if (route) route.avg_cost_eur = r2(route.avg_l100 != null ? route.avg_l100 / 100 * t.km * price(t.start_ts) : null);
   const pts0 = JSON.parse(t.points || '[]');
   const path = await tripPath(env, t, pts0);
+  const tp = tripPlaces(pts0, await getPlaces(env));
+  if (pts0.length && !t.circuit && !t.track) {
+    const a = pts0[0], b = pts0[pts0.length - 1];
+    if (!tp.from) tp.from = await geoName(env, a[0], a[1]);
+    if (!tp.to) tp.to = await geoName(env, b[0], b[1]);
+  }
   // Con pocas lecturas la punta real se pierde: si sale menor que la media, no es fiable
   if (t.max_speed != null && t.avg_speed && t.max_speed < t.avg_speed) { t.max_speed_low = true; }
-  return { ...t, ...tripPlaces(pts0, await getPlaces(env)), points: pts0, path, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+  return { ...t, ...tp, points: pts0, path, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
 }
 
 // Ruta por carretera: el coche solo manda un punto cada ~2 min, así que se calcula el camino real
@@ -1433,6 +1448,68 @@ function placeAt(lat, lon, places) {
   let best = null, bd = 1e9;
   for (const p of places) { const d = distKm(lat, lon, p.lat, p.lon); if (d <= (p.r || 0.4) && d < bd) { bd = d; best = p.name; } }
   return best;
+}
+
+// ---------- Nombre de un sitio sin guardar (OpenStreetMap) ----------
+// Primero un comercio/lugar con nombre a menos de 70 m (p. ej. "Consum Constantí"); si no, la calle y el pueblo.
+const geoKey = (lat, lon) => lat.toFixed(4) + ',' + lon.toFixed(4); // ~10 m
+const UA = { 'user-agent': 'fiesta-st-garaje/1.0 (app personal)', 'accept-language': 'es' };
+const POI_SKIP = /^(parking|parking_entrance|parking_space|bench|waste_basket|waste_disposal|recycling|vending_machine|post_box|bicycle_parking|toilets|telephone|atm|shelter|drinking_water|charging_station|motorcycle_parking|fountain|clock|bicycle_rental|letter_box|grit_bin|hunting_stand|loading_dock)$/;
+
+async function geoName(env, lat, lon) {
+  if (lat == null || lon == null) return null;
+  const k = geoKey(lat, lon);
+  const c = await env.DB.prepare('SELECT name FROM geo WHERE k = ?').bind(k).first();
+  if (c) return c.name;
+  let town = null, road = null, poi = null, failed = false;
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=${lat}&lon=${lon}`, { headers: UA });
+    if (r.ok) {
+      const j = await r.json(), a = j.address || {};
+      town = a.village || a.town || a.city || a.municipality || a.hamlet || null;
+      road = a.road || a.pedestrian || a.square || null;
+      if (j.name && j.category !== 'highway' && j.category !== 'building' && j.category !== 'place' && j.name !== road) poi = j.name;
+    } else failed = true;
+  } catch (e) { failed = true; }
+  try {
+    const q = `[out:json][timeout:8];(nwr(around:70,${lat},${lon})["name"]["shop"];nwr(around:70,${lat},${lon})["name"]["amenity"];nwr(around:70,${lat},${lon})["name"]["tourism"];nwr(around:70,${lat},${lon})["name"]["leisure"];);out center tags 30;`;
+    const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { ...UA, 'content-type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) });
+    if (r.ok) {
+      const j = await r.json();
+      const best = (j.elements || [])
+        .filter(e => e.tags && e.tags.name && !POI_SKIP.test(e.tags.amenity || ''))
+        .map(e => { const la = e.lat ?? e.center?.lat, lo = e.lon ?? e.center?.lon; return { n: e.tags.brand && !e.tags.name.includes(e.tags.brand) ? e.tags.brand : e.tags.name, d: la != null ? distKm(lat, lon, la, lo) : 1, shop: !!e.tags.shop }; })
+        .sort((x, y) => (x.d - (x.shop ? 0.02 : 0)) - (y.d - (y.shop ? 0.02 : 0)))[0];
+      if (best) poi = best.n;
+    }
+  } catch (e) { /* sin Overpass: queda lo de Nominatim */ }
+  let name = poi ? (town && !poi.toLowerCase().includes(town.toLowerCase()) ? `${poi} ${town}` : poi)
+    : road ? (town ? `${road}, ${town}` : road) : town;
+  if (!name && failed) return null; // reintentar más tarde
+  name = name ? String(name).slice(0, 60) : null;
+  await env.DB.prepare('INSERT OR REPLACE INTO geo VALUES (?, ?, ?)').bind(k, name, Date.now()).run();
+  return name;
+}
+async function geoCached(env, pairs) {
+  const keys = [...new Set(pairs.filter(p => p && p[0] != null).map(p => geoKey(p[0], p[1])))];
+  const out = {};
+  for (let i = 0; i < keys.length; i += 50) {
+    const ks = keys.slice(i, i + 50);
+    const { results } = await env.DB.prepare(`SELECT k, name FROM geo WHERE k IN (${ks.map(() => '?').join(',')})`).bind(...ks).all();
+    for (const r of results) out[r.k] = r.name;
+  }
+  return out;
+}
+// En el cron: pone nombre a una salida/llegada pendiente por minuto (para no saturar OpenStreetMap)
+async function geoBackfill(env) {
+  const places = await getPlaces(env);
+  const { results } = await env.DB.prepare('SELECT id, start_lat, start_lon, end_lat, end_lon FROM trips WHERE COALESCE(track, 0) = 0 ORDER BY start_ts DESC LIMIT 60').all();
+  const cache = await geoCached(env, results.flatMap(t => [[t.start_lat, t.start_lon], [t.end_lat, t.end_lon]]));
+  for (const t of results) for (const [la, lo] of [[t.start_lat, t.start_lon], [t.end_lat, t.end_lon]]) {
+    if (la == null || placeAt(la, lo, places) || geoKey(la, lo) in cache) continue;
+    await geoName(env, la, lo);
+    return;
+  }
 }
 
 function tripPlaces(pts, places) {
