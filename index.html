@@ -555,11 +555,11 @@ function viewTrip(t) {
   ${t.circuit ? `<div class="pn pad row"><span class="k" style="color:${C.ac}">🏁 ${esc(t.circuit)}</span><span style="font-size:12px;color:#7d858f">Sesión en circuito</span></div>` : ''}
   <div class="pn" style="overflow:hidden;position:relative"><div id="tripMapHost" class="map"></div>
     <div class="m" style="position:absolute;left:10px;bottom:22px;z-index:500;display:flex;gap:10px;background:rgba(10,11,13,.85);border-radius:8px;padding:6px 10px;font-size:11px">
-      ${t.max_speed == null ? `<span style="color:${C.ok}">● Salida</span><span style="color:#f4f5f6">● Llegada</span>` : `<span style="color:${C.ac}">● &lt;70</span><span style="color:${C.wa}">● 70–95</span><span style="color:${C.bad}">● &gt;95 km/h</span>`}</div></div>
+      ${t.max_speed == null || t.path ? `<span style="color:${C.ok}">● Salida</span><span style="color:#f4f5f6">● Llegada</span>${t.path ? `<span style="color:${C.ac}">┅ Ruta estimada</span>` : ''}` : `<span style="color:${C.ac}">● &lt;70</span><span style="color:${C.wa}">● 70–95</span><span style="color:${C.bad}">● &gt;95 km/h</span>`}</div></div>
   <div class="g2">${kv('Distancia', nf(t.km, 1), 'km')}${kv('Tiempo', clock(t.duration_s))}</div>
   ${cmp}
   <div class="pn" style="padding:4px 16px">
-    ${trow('Velocidad media', nf(t.avg_speed), 'km/h')}${trow('Velocidad punta', nf(t.max_speed), 'km/h', true)}
+    ${trow('Velocidad media', nf(t.avg_speed), 'km/h')}${trow('Velocidad punta', t.max_speed_low ? '—' : nf(t.max_speed), 'km/h', true)}
     ${trow('Régimen máximo', nf(t.max_rpm), 'rpm')}${st && st.cruise_rpm ? trow('Rpm a 110–125 km/h', nf(st.cruise_rpm), 'rpm') : ''}
     ${trow('Motor máximo', nf(t.max_oil), '°C')}${st && st.warm_min != null ? trow('A temperatura en', nf(st.warm_min), 'min') : ''}
     ${t.circuit || t.rpm_high_pct ? trow('Sobre 4.000 rpm', nf(t.rpm_high_pct), '%') : ''}
@@ -569,7 +569,8 @@ function viewTrip(t) {
     ${trow('Coste del trayecto', t.cost_eur != null ? nf(t.cost_eur, 2) : '—', '€', true)}
   </div>
   ${t.price_l ? `<p class="muted" style="padding:0 4px">Coste calculado con ${nf(t.price_l, 3)} €/L (tu último repostaje con precio, o la media de gasolineras cercanas).</p>` : ''}
-  ${t.max_speed == null ? `<p class="muted" style="padding:0 4px">El coche no mandó datos durante este trayecto, solo al arrancar y al apagar: el mapa une la salida y la llegada en línea recta y no hay velocidad ni rpm.</p>` : `<div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>
+  ${t.path && t.max_speed != null ? `<p class="muted" style="padding:0 4px">El coche mandó pocas lecturas en este trayecto (${t.points.length}), así que el mapa dibuja la ruta más probable por carretera y la velocidad punta no es fiable.</p>` : ''}
+  ${t.max_speed == null ? `<p class="muted" style="padding:0 4px">El coche no mandó datos durante este trayecto, solo al arrancar y al apagar: ${t.path ? 'el mapa dibuja la ruta más probable por carretera' : 'el mapa une la salida y la llegada en línea recta'} y no hay velocidad ni rpm.</p>` : `<div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>
   ${chart('Revoluciones', 'rpm', { min: 0, max: Math.max(3000, Math.ceil((t.max_rpm || 0) / 1000) * 1000), fmt: v => nf(v), color: C.blue })}
   ${gears}
   ${chart('Temperatura del motor', 'temp', { min: 0, max: 120, fmt: v => nf(v) + '°', color: C.wa })}
@@ -1037,11 +1038,13 @@ function afterRender() {
     if (m) {
       m.layer.clearLayers();
       const p = tripDetail.points;
-      for (let i = 0; i < p.length - 1; i++) L.polyline([[p[i][0], p[i][1]], [p[i + 1][0], p[i + 1][1]]], { color: speedCol(p[i][2]), weight: 5, opacity: .95, lineCap: 'round' }).addTo(m.layer);
+      const path = tripDetail.path;
+      if (path && path.length > 1) L.polyline(path, { color: C.ac, weight: 5, opacity: .9, lineCap: 'round', dashArray: '2 9' }).addTo(m.layer);
+      else for (let i = 0; i < p.length - 1; i++) L.polyline([[p[i][0], p[i][1]], [p[i + 1][0], p[i + 1][1]]], { color: speedCol(p[i][2]), weight: 5, opacity: .95, lineCap: 'round' }).addTo(m.layer);
       if (p.length) {
         dot([p[0][0], p[0][1]], C.ok).addTo(m.layer);
         dot([p[p.length - 1][0], p[p.length - 1][1]], '#f4f5f6').addTo(m.layer);
-        const b = L.latLngBounds(p.map(q => [q[0], q[1]]));
+        const b = L.latLngBounds((path && path.length > 1 ? path : p.map(q => [q[0], q[1]])));
         m.fit = () => b.isValid() && !b.getNorthEast().equals(b.getSouthWest()) ? m.map.fitBounds(b, { padding: [28, 28], maxZoom: 16 }) : m.map.setView([p[0][0], p[0][1]], 15);
         m.fit();
       }

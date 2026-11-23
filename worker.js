@@ -139,8 +139,8 @@ export default {
     await prepare(env);
     const st = await loadState(env);
     const minute = new Date(event.scheduledTime).getUTCMinutes();
-    // Con Ford real: aparcado, una consulta cada 5 min; en marcha, cada minuto.
-    const poll = src(env) !== 'ford' || st.trip || minute % 5 === 0 || (st.pollUntil && Date.now() < st.pollUntil) || (st.parkChecks && st.parkChecks.length);
+    // Con Ford real: aparcado, una consulta cada 2 min (para pillar pronto el arranque); en marcha, cada minuto.
+    const poll = src(env) !== 'ford' || st.trip || minute % 2 === 0 || (st.pollUntil && Date.now() < st.pollUntil) || (st.parkChecks && st.parkChecks.length);
     if (poll) {
       try { await ingest(env, await readCar(env), st); await fordHealth(env, null); }
       catch (e) { console.error('ingest', e); await fordHealth(env, e); }
@@ -805,6 +805,7 @@ async function prepare(env) {
   try { await db.prepare('ALTER TABLE trips ADD COLUMN circuit TEXT').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE refuels ADD COLUMN price_l REAL').run(); } catch (e) { /* ya existe */ }
   try { await db.prepare('ALTER TABLE refuels ADD COLUMN photo INTEGER').run(); } catch (e) { /* ya existe */ }
+  try { await db.prepare('ALTER TABLE trips ADD COLUMN path TEXT').run(); } catch (e) { /* ya existe */ }
   const mc = await db.prepare('SELECT COUNT(*) AS n FROM maintenance').first();
   if (!mc.n) {
     await db.batch(DEFAULT_MAINT.map(([n, km, mo]) =>
@@ -1058,7 +1059,38 @@ async function getTrip(env, id) {
   const price = await priceFinder(env);
   if (route) route.avg_cost_eur = r2(route.avg_l100 != null ? route.avg_l100 / 100 * t.km * price(t.start_ts) : null);
   const pts0 = JSON.parse(t.points || '[]');
-  return { ...t, ...tripPlaces(pts0, await getPlaces(env)), points: pts0, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+  const path = await tripPath(env, t, pts0);
+  // Con pocas lecturas la punta real se pierde: si sale menor que la media, no es fiable
+  if (t.max_speed != null && t.avg_speed && t.max_speed < t.avg_speed) { t.max_speed_low = true; }
+  return { ...t, ...tripPlaces(pts0, await getPlaces(env)), points: pts0, path, route, ...(await tripSeries(env, t)), cost_eur: t.fuel_used_l != null ? round(t.fuel_used_l * price(t.start_ts), 2) : null, price_l: round(price(t.start_ts), 3) };
+}
+
+// Trayecto con pocas lecturas (huecos de más de 3 min): se calcula la ruta por carretera entre ellas
+// para que el mapa no sea una línea recta. Se guarda para no pedirla otra vez.
+function sparseTrip(pts) {
+  if (pts.length < 2) return false;
+  for (let i = 1; i < pts.length; i++) if ((pts[i][3] || 0) - (pts[i - 1][3] || 0) > 180e3 && distKm(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) > 0.5) return true;
+  return false;
+}
+async function tripPath(env, t, pts) {
+  if (t.path) { try { return JSON.parse(t.path); } catch (e) { return null; } }
+  if (t.circuit || t.track || !sparseTrip(pts)) return null;
+  let way = pts.filter((p, i) => i === 0 || i === pts.length - 1 || distKm(p[0], p[1], pts[i - 1][0], pts[i - 1][1]) > 0.3);
+  if (way.length > 25) { const k = (way.length - 1) / 24; way = Array.from({ length: 25 }, (_, i) => way[Math.round(i * k)]); }
+  try {
+    const url = 'https://router.project-osrm.org/route/v1/driving/' + way.map(p => p[1].toFixed(5) + ',' + p[0].toFixed(5)).join(';') + '?overview=full&geometries=geojson';
+    const r = await fetch(url, { headers: { 'user-agent': 'fiesta-st-garaje (uso personal)' }, cf: { cacheTtl: 86400 } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const co = j.routes && j.routes[0] && j.routes[0].geometry && j.routes[0].geometry.coordinates;
+    if (!co || co.length < 2) return null;
+    // Si la ruta sale mucho más larga que los km del odómetro, no es la que hiciste
+    const km = j.routes[0].distance / 1000;
+    if (t.km && (km > t.km * 1.6 + 1 || km < t.km * 0.5 - 1)) return null;
+    const path = co.map(c => [round(c[1], 5), round(c[0], 5)]).filter((p, i, a) => i === 0 || i === a.length - 1 || i % 2 === 0 || a.length < 400);
+    await env.DB.prepare('UPDATE trips SET path = ? WHERE id = ?').bind(JSON.stringify(path), t.id).run();
+    return path;
+  } catch (e) { console.error('ruta', e); return null; }
 }
 
 const r2 = v => v == null ? null : Math.round(v * 100) / 100;
@@ -1524,7 +1556,7 @@ async function deleteDeadline(env, id) {
 
 // ---------- Widget (Scriptable / Atajos) ----------
 async function widget(env) {
-  const c = await readCar(env);
+  const c = await getLive(env); // lo que lee el widget también cuenta para detectar el arranque
   return {
     range_km: c.range_km, fuel_pct: c.fuel_pct, locked: c.locked, doors_open: c.doors_open || [],
     tyres: c.tyres, tyres_low: c.tyres_low || [], battery_v: c.battery_v, odometer_km: c.odometer_km,
