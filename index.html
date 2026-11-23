@@ -53,6 +53,9 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .alert{border:1px solid #4a3a12;background:#1f1a0d;color:var(--wa);border-radius:12px;padding:12px 14px;font-size:14px;font-weight:600}
 .err{border:1px solid #4a1d18;background:#1f0f0d;color:#ff9a8f;border-radius:12px;padding:12px 14px;font-size:14px}
 .okmsg{border:1px solid #17402e;background:#0d1f17;color:#9cf2cd;border-radius:12px;padding:12px 14px;font-size:14px}
+label.btn{flex-direction:row;font:700 13px var(--mono);letter-spacing:.08em;color:#0a0b0d;cursor:pointer}
+label.btn.sec{color:var(--tx)}
+.pumpIn{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 .btn{min-height:46px;border:0;border-radius:10px;font:700 13px var(--mono);letter-spacing:.08em;text-transform:uppercase;background:var(--ac);color:#0a0b0d;padding:0 16px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
 .btn.sec{background:transparent;color:var(--tx);border:1px solid var(--ln)}
 .btn.ghost{background:transparent;color:var(--ac);border:1px dashed #3a3f46}
@@ -700,7 +703,7 @@ function viewDatos() {
   ${expensesCard()}
   <div class="pn" style="padding:4px 16px">
     <div class="row" style="padding:12px 0"><span class="k">Repostajes</span><button class="m" id="copyCsv" style="background:none;border:0;color:${C.ac};font-size:12px;font-weight:600;letter-spacing:.08em;min-height:36px">COPIAR CSV</button></div>
-    <button class="btn sec" data-pump="" style="margin-bottom:8px">📸 Foto del surtidor</button>
+    <label class="btn sec" for="pumpFile" data-pump="" style="margin-bottom:8px;width:100%">📸 Foto del surtidor</label>
     ${rows}
   </div>`;
 }
@@ -849,7 +852,7 @@ function sheetHtml() {
     return `<form class="sheet" id="sheetForm">
       <span class="k">Repostaje del ${new Date(r.ts).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</span>
       ${r.photo ? `<img id="sPhoto" alt="Foto del surtidor" style="width:100%;max-height:220px;object-fit:cover;border-radius:10px;background:#15181c;min-height:120px">` : ''}
-      <button type="button" class="btn sec" data-pump="${r.ts}">📸 ${r.photo ? 'Cambiar foto del surtidor' : 'Rellenar con foto del surtidor'}</button>
+      <label class="btn sec" for="pumpFile" data-pump="${r.ts}">📸 ${r.photo ? 'Cambiar foto del surtidor' : 'Rellenar con foto del surtidor'}</label>
       <label for="sLitres">Litros del tique<input id="sLitres" inputmode="decimal" value="${r.litres != null ? nf(r.litres, 2) : ''}" placeholder="41,00"></label>
       <p class="muted">Pon los litros reales del surtidor: si llenaste el depósito, con ellos se corrige el cálculo de consumo de los trayectos.</p>
       ${r.price_auto ? '<p class="muted">Precio calculado con la gasolinera más cercana. Corrígelo con el del tique si quieres.</p>' : ''}
@@ -1184,20 +1187,25 @@ function bindSettings() {
 }
 
 // Foto del surtidor: se reduce en el móvil y la IA del servidor lee importe, litros y €/L
-function pickPump(ts) {
-  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
-  inp.onchange = async () => {
-    const f = inp.files && inp.files[0]; if (!f) return;
-    try {
-      const img = await shrinkImage(f, 1400);
-      sheet = { type: 'pump', ts: ts || null, img, reading: true }; render();
-      let read;
-      try { read = await api('/api/pump/read', { method: 'POST', body: JSON.stringify({ image: img }) }); }
-      catch (e) { read = { error: e.message }; }
-      if (sheet && sheet.type === 'pump' && sheet.img === img) { sheet.reading = false; sheet.read = read; render(); }
-    } catch (e) { error = 'No he podido abrir la foto'; render(); }
-  };
-  inp.click();
+// Input fijo fuera de lo que se repinta: así iOS siempre entrega la foto aunque la pantalla se refresque
+let pumpTs = null;
+const pumpFile = (() => {
+  const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.id = 'pumpFile'; i.className = 'pumpIn';
+  document.body.appendChild(i);
+  i.addEventListener('change', () => { pumpChosen(i); });
+  return i;
+})();
+async function pumpChosen(inp) {
+  const f = inp.files && inp.files[0]; if (!f) return;
+  const ts = pumpTs; inp.value = '';
+  try {
+    const img = await shrinkImage(f, 1400);
+    sheet = { type: 'pump', ts, img, reading: true }; render();
+    let read;
+    try { read = await api('/api/pump/read', { method: 'POST', body: JSON.stringify({ image: img }) }); }
+    catch (e) { read = { error: e.message }; }
+    if (sheet && sheet.type === 'pump' && sheet.img === img) { sheet.reading = false; sheet.read = read; render(); }
+  } catch (e) { error = 'No he podido abrir la foto: ' + (e.message || e); render(); }
 }
 function shrinkImage(file, max) {
   return new Promise((ok, ko) => {
@@ -1208,7 +1216,7 @@ function shrinkImage(file, max) {
       cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height); URL.revokeObjectURL(u);
       ok(cv.toDataURL('image/jpeg', 0.82));
     };
-    im.onerror = ko; im.src = u;
+    im.onerror = () => { URL.revokeObjectURL(u); ko(new Error('formato de imagen no compatible')); }; im.src = u;
   });
 }
 async function loadPumpPhoto(ts) {
@@ -1220,7 +1228,7 @@ async function loadPumpPhoto(ts) {
 }
 
 function bindSheet() {
-  document.querySelectorAll('[data-pump]').forEach(b => b.onclick = () => pickPump(Number(b.dataset.pump) || null));
+  document.querySelectorAll('label[data-pump]').forEach(l => l.addEventListener('click', () => { pumpTs = Number(l.dataset.pump) || null; haptic(); }));
   const bg = $('#sheetBg'); if (!bg) return;
   if (sheet && sheet.type === 'refuel' && sheet.item.photo) loadPumpPhoto(sheet.item.ts);
   bg.onclick = e => { if (e.target === bg) closeSheet(); };
