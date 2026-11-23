@@ -131,7 +131,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let favHist = null, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let fordSt = null, backups = null, favHist = null, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -174,6 +174,7 @@ async function loadFor(t, force) {
   if (t === 'estado') add('parking', 30e3, async () => { parking = await api('/api/parking'); });
   if (t === 'ajustes') add('guard', 30e3, async () => { guard = await api('/api/guard'); });
   if (t === 'ajustes') add('tyres', 300e3, async () => { tyrePrefs = await api('/api/tyres'); });
+  if (t === 'ajustes') add('fordst', 60e3, async () => { [fordSt, backups] = await Promise.all([api('/api/ford/status'), api('/api/backups').catch(() => ({ backups: [] }))]); });
   if (t === 'estado' || t === 'datos') add('battery', 300e3, async () => { battery = await api('/api/battery'); });
   if (t === 'taller') { add('tyreset', 60e3, async () => { tyreSet = await api('/api/tyreset'); }); add('deadlines', 60e3, async () => { deadlines = (await api('/api/deadlines')).items; }); }
   if (t === 'viajes') add('trackdays', 120e3, async () => { trackdays = (await api('/api/trackdays')).days; });
@@ -824,10 +825,17 @@ function viewAjustes() {
     <div class="g2"><label for="gFrom">Desde<input id="gFrom" type="time" value="${guard.from}"></label><label for="gTo">Hasta<input id="gTo" type="time" value="${guard.to}"></label></div>
     <p class="muted">Te aviso si el coche arranca mientras está activa, y siempre que se mueva más de 300 m con el motor apagado.</p>` : '<p class="muted">Cargando…</p>'}
   </div>
+  ${fordSt ? `<div class="pn pad col" style="gap:10px">
+    <div class="row"><span class="k">Conexión con Ford</span><span class="tag" style="color:${fordSt.health ? C.bad : C.ok};border-color:${fordSt.health ? C.bad : C.ok}55">${fordSt.health ? 'Fallando' : fordSt.connected ? 'Conectado' : 'Sin conectar'}</span></div>
+    <span style="font-size:13px;color:#7d858f">Coche …${esc(fordSt.vin_end || '')}${fordSt.last_data ? ' · última lectura ' + ago(fordSt.last_data) : ''}</span>
+    ${fordSt.health ? `<p style="margin:0;font-size:13px;color:${C.bad}">Falla desde ${hm(fordSt.health.failSince)}: ${esc(fordSt.health.last || '')}</p>
+    <p class="muted">Para reconectar: abre tu Codespace de GitHub (github.com/codespaces), en el escritorio (puerto 6080) abre el terminal y ejecuta <b>python herramientas/conectar_ford.py --nuevo</b>. Inicia sesión en la página de Ford y listo.</p>` : '<p class="muted">Si un día falla más de una hora seguida, te llega un aviso con los pasos para reconectar.</p>'}
+  </div>` : ''}
   <div class="pn pad col" style="gap:10px">
     <span class="k">Copia de seguridad</span>
-    <p class="muted">Descarga todos tus datos (histórico, trayectos, repostajes y taller) en un archivo. Guárdalo en Archivos o iCloud.</p>
-    <button class="btn sec" id="backupBtn">Descargar copia</button>
+    <p class="muted">Cada domingo a las 4:00 se guarda una copia automática en un almacén aparte (se conservan las 12 últimas). También puedes descargar una ahora y guardarla en Archivos o iCloud.</p>
+    ${backups && backups.backups.length ? backups.backups.slice(0, 4).map(b => `<button class="li" data-backup="${esc(b.name)}" style="grid-template-columns:1fr auto"><span style="font-size:14px">${new Date(b.name.slice(6)).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</span><span class="m" style="font-size:13px;color:#7d858f">${b.bytes ? nf(b.bytes / 1024) + ' KB' : ''} ↓</span></button>`).join('') : '<p class="muted" style="margin:0">La primera copia automática se hará este domingo.</p>'}
+    <button class="btn sec" id="backupBtn">Descargar copia ahora</button>
   </div>
   <button class="btn sec" id="cancelCfg">Volver</button>` : ''}
   <p class="muted">La conexión se guarda solo en este móvil.</p>`;
@@ -1124,6 +1132,12 @@ function bindSettings() {
     } catch (e) { error = e.message; render(); }
   };
   ['#gEnabled', '#gNight', '#gFrom', '#gTo'].forEach(id => { const el = $(id); if (el) el.onchange = saveGuard; });
+  document.querySelectorAll('[data-backup]').forEach(b => b.onclick = async () => {
+    try {
+      const data = await api('/api/backups/' + encodeURIComponent(b.dataset.backup));
+      await shareBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `fiesta-st-${b.dataset.backup}.json`, 'Copia');
+    } catch (e) { error = e.message; render(); }
+  });
   const bk = $('#backupBtn'); if (bk) bk.onclick = async () => {
     bk.disabled = true; bk.textContent = 'Preparando…';
     try {

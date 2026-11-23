@@ -97,6 +97,8 @@ export default {
       if (m === 'POST' && p === '/api/deadlines') return json(await saveDeadline(env, await req.json()));
       if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
+      if (m === 'GET' && p === '/api/backups') return json(await listBackups(env));
+      if (m === 'GET' && p.startsWith('/api/backups/')) return json(await getBackup(env, decodeURIComponent(p.slice(13))));
       if (m === 'GET' && p === '/api/expenses') return json(await listExpenses(env, url.searchParams.get('year')));
       if (m === 'POST' && p === '/api/expenses') return json(await saveExpense(env, await req.json()));
       if (m === 'GET' && p === '/api/places') return json({ places: await getPlaces(env) });
@@ -137,7 +139,8 @@ export default {
     // Con Ford real: aparcado, una consulta cada 5 min; en marcha, cada minuto.
     const poll = src(env) !== 'ford' || st.trip || minute % 5 === 0 || (st.pollUntil && Date.now() < st.pollUntil) || (st.parkChecks && st.parkChecks.length);
     if (poll) {
-      try { await ingest(env, await readCar(env), st); } catch (e) { console.error('ingest', e); }
+      try { await ingest(env, await readCar(env), st); await fordHealth(env, null); }
+      catch (e) { console.error('ingest', e); await fordHealth(env, e); }
     }
     // Tras aparcar: comprobar si se ha cerrado (el coche no avisa solo de que lo has cerrado)
     const stp = await loadState(env);
@@ -157,6 +160,7 @@ export default {
     }
     await parkingTimer(env);
     await daily(env, event.scheduledTime);
+    try { await weeklyBackup(env, event.scheduledTime); } catch (e) { console.error('copia', e); }
   }
 };
 
@@ -417,6 +421,8 @@ async function fordStatus(env) {
   return {
     source: src(env), connected: !!(f && f.cat_refresh), vin_end: f && f.vin ? f.vin.slice(-6) : null,
     connected_at: f && f.connected_at, error: f && f.error,
+    health: await (async () => { const h = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_health'").first(); return h ? JSON.parse(h.v) : null; })(),
+    last_data: await (async () => { const r = await env.DB.prepare('SELECT MAX(ts) AS t FROM snapshots').first(); return r ? r.t : null; })(),
     metrics: raw ? Object.keys(JSON.parse(raw.v).metrics || {}) : []
   };
 }
@@ -728,6 +734,7 @@ async function daily(env, when) {
   try { await slowPuncture(env, day); } catch (e) { console.error('pinchazo', e); }
   try { await shortTripsBattery(env, day); } catch (e) { console.error('trayectos cortos', e); }
   try { await calibrateGears(env); } catch (e) { console.error('marchas', e); }
+  try { await pruneOld(env); } catch (e) { console.error('limpieza', e); }
   const b = await getBattery(env, 14);
   if (b.status === 'bajando') {
     await sendPushAll(env, { title: 'Batería de 12 V', body: `Va bajando unos ${fmt(Math.abs(b.slope), 2)} V al día. Conviene revisarla.`, url: '#datos', tag: 'batt_trend' });
@@ -1187,6 +1194,59 @@ async function listExpenses(env, year) {
   return { year: y, cats: EXPENSE_CATS, items, refuels: rf, by_cat: byCat, total, km, eur_km: km > 50 ? round(total / km, 3) : null };
 }
 
+// ---------- Salud de la conexión con Ford ----------
+async function fordHealth(env, err) {
+  if (src(env) !== 'ford') return;
+  const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'ford_health'").first();
+  const h = row ? JSON.parse(row.v) : { failSince: null, alerted: false };
+  if (!err) {
+    if (h.alerted) await sendPushAll(env, { title: 'Ford conectado de nuevo', body: 'Vuelven a llegar los datos del coche.', url: '#estado', tag: 'ford_down' });
+    if (h.failSince) await env.DB.prepare("DELETE FROM kv WHERE k = 'ford_health'").run();
+    return;
+  }
+  h.failSince = h.failSince || Date.now();
+  h.last = String(err && err.message || err).slice(0, 200);
+  if (!h.alerted && Date.now() - h.failSince > 3600e3) {
+    h.alerted = true;
+    await sendPushAll(env, { title: '⚠️ Sin conexión con Ford', urgent: true, url: '#ajustes', tag: 'ford_down',
+      body: 'Llevo más de una hora sin poder leer el coche (puede que haya caducado el acceso o cambiaste la contraseña de FordPass). Ajustes → Conexión con Ford para ver cómo reconectar.' });
+  }
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford_health', ?)").bind(JSON.stringify(h)).run();
+}
+
+// ---------- Copia de seguridad semanal (en un almacén aparte de la base de datos) ----------
+async function weeklyBackup(env, when) {
+  if (!env.BACKUPS) return;
+  const local = new Date(when + 3600e3);
+  if (local.getUTCDay() !== 0 || local.getUTCHours() !== 4 || local.getUTCMinutes() !== 0) return; // domingos a las 4:00
+  const data = JSON.stringify(await exportAll(env));
+  const key = 'copia-' + local.toISOString().slice(0, 10);
+  await env.BACKUPS.put(key, data, { metadata: { bytes: data.length, at: Date.now() } });
+  const { keys } = await env.BACKUPS.list({ prefix: 'copia-' });
+  const old = keys.map(k => k.name).sort().slice(0, -12); // se quedan las 12 últimas (3 meses)
+  for (const k of old) await env.BACKUPS.delete(k);
+}
+
+async function listBackups(env) {
+  if (!env.BACKUPS) return { backups: [] };
+  const { keys } = await env.BACKUPS.list({ prefix: 'copia-' });
+  return { backups: keys.map(k => ({ name: k.name, bytes: k.metadata && k.metadata.bytes, at: k.metadata && k.metadata.at })).sort((a, b) => b.name.localeCompare(a.name)) };
+}
+
+async function getBackup(env, name) {
+  if (!env.BACKUPS || !/^copia-\d{4}-\d{2}-\d{2}$/.test(name)) throw httpError('Copia no encontrada', 404);
+  const v = await env.BACKUPS.get(name);
+  if (!v) throw httpError('Copia no encontrada', 404);
+  return JSON.parse(v);
+}
+
+// ---------- Limpieza: lecturas de hace más de un año, una por día ----------
+async function pruneOld(env) {
+  const cutoff = Date.now() - 365 * 86400e3;
+  await env.DB.prepare(`DELETE FROM snapshots WHERE ts < ? AND ts NOT IN (
+    SELECT MIN(ts) FROM snapshots WHERE ts < ? GROUP BY date((ts + 3600000) / 1000, 'unixepoch'))`).bind(cutoff, cutoff).run();
+}
+
 // ---------- Lugares guardados (Casa, Trabajo…) ----------
 async function getPlaces(env) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'places'").first();
@@ -1499,7 +1559,7 @@ async function exportAll(env) {
     all('SELECT * FROM refuels ORDER BY ts'),
     all('SELECT * FROM trips ORDER BY start_ts'),
     all('SELECT * FROM maintenance ORDER BY id'),
-    all("SELECT k, v FROM kv WHERE k IN ('guard', 'parking')")
+    all("SELECT k, v FROM kv WHERE k NOT IN ('ford', 'vapid', 'ford_raw', 'ford_raw_at', 'live_cache', 'state', 'daily') AND k NOT LIKE 'fuel_cache_%'")
   ]);
   return { app: 'fiesta-st-garaje', schema: SCHEMA, exported_at: new Date().toISOString(), source: src(env) || 'mock', snapshots, refuels, trips, maintenance, settings: kv };
 }
