@@ -1802,8 +1802,9 @@ async function getTyreSet(env) {
   if (t.mounted_date) Object.assign(out, (({ km, days }) => ({ track_km: round(km, 1), track_days: days }))(await trackSince(env, t.mounted_date)));
   const base = t.rotated_km ?? t.mounted_km;
   if (base != null && odo != null) out.rotate_in_km = Math.round(base + 10000 - odo);
-  // Vida orientativa de un semi-slick de calle como las SuperSport: ~20.000 km en uso normal; cada km de circuito gasta como ~8 de carretera
-  out.life_km = /supersport|cup|trofeo|r-?s|semi/i.test(t.model || '') ? 20000 : 35000;
+  // Vida orientativa: semi-slick (SuperSport R/RS, Cup, Trofeo) ~20.000 km; deportivo de calle como la SuperSport ~35.000 km;
+  // cada km de circuito gasta como ~8 de carretera. Se puede fijar a mano con life_km.
+  out.life_km = t.life_km || (/supersport\s*rs?\b|cup|trofeo|semi/i.test(t.model || '') ? 20000 : /supersport|pilot sport 4|ps4|p zero/i.test(t.model || '') ? 35000 : 40000);
   if (out.km != null) {
     const used = out.km + (out.track_km || 0) * 7;
     out.left_km = Math.max(0, Math.round(out.life_km - used));
