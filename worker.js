@@ -70,6 +70,14 @@ export default {
   async fetch(req, env, ctx) {
     if (req.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
     if (!env.APP_KEY) return json({ error: 'Falta el secret APP_KEY en el Worker' }, 500);
+    // Siri (app Atajos): la contraseña puede ir en la dirección y siempre contesta con una frase, aunque falle
+    if (new URL(req.url).pathname === '/api/siri') {
+      const u = new URL(req.url);
+      const say = (t, st = 200) => new Response(t, { status: st, headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } });
+      if ((req.headers.get('x-app-key') || u.searchParams.get('k')) !== env.APP_KEY) return say('La contraseña del atajo no es correcta. Vuelve a copiar la dirección desde los ajustes de la app.');
+      try { await prepare(env); return say(await siriText(env)); }
+      catch (e) { console.error('siri', e); return say('Ahora mismo no puedo leer el coche: ' + String(e.message || e)); }
+    }
     if (req.headers.get('x-app-key') !== env.APP_KEY) return json({ error: 'Contraseña incorrecta' }, 401);
     const url = new URL(req.url);
     const p = url.pathname, m = req.method;
@@ -100,7 +108,6 @@ export default {
       if (m === 'POST' && p === '/api/deadlines') return json(await saveDeadline(env, await req.json()));
       if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
-      if (m === 'GET' && p === '/api/siri') return new Response(await siriText(env), { headers: { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' } });
       if (m === 'GET' && p === '/api/fuel/advice') return json(await refuelAdvice(env));
       if (m === 'GET' && p === '/api/month') return json(await monthSummary(env, url.searchParams.get('m')));
       if (m === 'GET' && p === '/api/backups') return json(await listBackups(env));

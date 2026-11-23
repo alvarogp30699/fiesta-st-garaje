@@ -879,10 +879,10 @@ function viewAjustes() {
   </div>
   <div class="pn pad col" style="gap:10px">
     <span class="k">Siri: "¿Cómo está el coche?"</span>
-    <p class="muted">En la app <b>Atajos</b>: + → Añadir acción:<br>
-    1. <b>Obtener contenido de URL</b>: copia la dirección de abajo. Toca "Mostrar más" → Cabeceras → Añadir: clave <b>x-app-key</b>, valor tu contraseña.<br>
-    2. <b>Leer texto</b> (o "Mostrar resultado"), con el contenido de la URL.<br>
-    3. Ponle de nombre <b>Cómo está el coche</b>. Ya puedes decir "Oye Siri, cómo está el coche".</p>
+    <p class="muted">1. Toca <b>Copiar dirección</b> (ya lleva tu contraseña dentro, no hace falta poner cabeceras).<br>
+    2. En <b>Atajos</b>: + → busca <b>Obtener contenido de URL</b> → toca "URL" y pega.<br>
+    3. Añade <b>Leer texto</b> debajo.<br>
+    4. Ponle de nombre <b>Cómo está el coche</b>. Di "Oye Siri, cómo está el coche".</p>
     <div class="btns"><button class="btn sec" id="copySiri">Copiar dirección</button><button class="btn sec" id="testSiri">Probar</button></div>
     <p id="siriOut" class="muted" style="color:var(--tx)"></p>
   </div>
@@ -1217,7 +1217,7 @@ function bindSettings() {
       loaded.guard = Date.now(); flash('Vigilancia guardada');
     } catch (e) { error = e.message; render(); }
   };
-  const cs = $('#copySiri'); if (cs) cs.onclick = async () => { try { await navigator.clipboard.writeText(cfg.url.replace(/\/+$/, '') + '/api/siri'); flash('Dirección copiada'); } catch (e) { flash('No se ha podido copiar'); } };
+  const cs = $('#copySiri'); if (cs) cs.onclick = async () => { try { await navigator.clipboard.writeText(cfg.url.replace(/\/+$/, '') + '/api/siri?k=' + encodeURIComponent(cfg.key)); flash('Dirección copiada (con tu contraseña: no la compartas)'); } catch (e) { flash('No se ha podido copiar'); } };
   const tsi = $('#testSiri'); if (tsi) tsi.onclick = async () => {
     const o = $('#siriOut'); o.textContent = 'Preguntando…';
     try { const r = await fetch(cfg.url.replace(/\/+$/, '') + '/api/siri', { headers: { 'x-app-key': cfg.key } }); o.textContent = await r.text(); }
