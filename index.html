@@ -387,7 +387,7 @@ function viewEstado(c) {
   <div class="g3">
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Odómetro</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.odometer_km)}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.battery_v, 1)} V</span><span style="font-size:11px;color:${bCol}">${bTxt}${c.battery_soc != null ? ' · ' + nf(c.battery_soc) + ' %' : ''}${battery && battery.status === 'bajando' ? ' · bajando' : ''}</span></div>
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Puertas</span><span class="m" style="font-size:20px;font-weight:700;color:${open.length ? C.bad : C.ok}">${open.length ? 'ABIERTO' : 'OK'}</span>${open.length ? `<span style="font-size:11px;color:${C.bad}">${esc(open.join(', '))}</span>` : ''}</div>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Puertas</span><span class="m" style="font-size:20px;font-weight:700;color:${c.lock_checking ? C.wa : open.length ? C.bad : C.ok}">${c.lock_checking ? '…' : open.length ? 'ABIERTO' : 'OK'}</span>${c.lock_checking ? `<span style="font-size:11px;color:${C.wa}">Recién aparcado: comprobando</span>` : open.length ? `<span style="font-size:11px;color:${C.bad}">${esc(open.join(', '))}</span>` : ''}</div>
   </div>
   ${loc ? `<div class="pn" style="padding:10px;display:flex;align-items:center;gap:12px">
     <div id="parkMapHost" class="mini"></div>
@@ -848,6 +848,7 @@ function renderDrive() {
 function renderBadge() {
   const running = live && live.ignition !== 'off';
   const state = !live ? '' : running ? `<span class="chip live" style="color:${C.ac}"><i></i>En marcha</span>`
+    : live.locked === false && live.lock_checking ? `<span class="chip" style="color:${C.wa}"><i></i>Comprobando cierre…</span>`
     : live.locked === false ? `<span class="chip" style="color:${C.bad}"><i></i>Abierto</span>` : `<span class="chip" style="color:${C.ok}"><i></i>Cerrado</span>`;
   const src = live && live.source === 'mock' ? `<span class="chip" style="color:${C.wa}">Prueba</span>` : '';
   $('#badge').innerHTML = tab === 'ajustes' ? '' : tab === 'estado' ? state : src;

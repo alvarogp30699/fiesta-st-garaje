@@ -9,7 +9,8 @@ const LIVE_MIN_INTERVAL_S = 30;  // con Ford real: no consultar más a menudo
 const GAP_PARKED_S = 300;        // registro del histórico aparcado
 const GAP_DRIVING_S = 60;        // registro del histórico en marcha
 const POINT_GAP_S = 15;          // puntos del recorrido
-const UNLOCKED_GRACE_S = 300;    // margen antes de avisar de coche abierto
+const UNLOCKED_GRACE_S = 480;    // margen antes de avisar de coche abierto (da tiempo a las comprobaciones tras aparcar)
+const PARK_CHECKS_S = [180, 360]; // tras apagar, se le pide el estado al coche a los 3 y 6 min para ver si lo has cerrado
 const TYRE_MIN = 2.2, BATT_MIN = 12.2, FUEL_MIN = 12, OIL_WARM = 80;
 const FUEL_API = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/FiltroProvincia/';
 const FUEL_FIELDS = { '95': 'Precio Gasolina 95 E5', '98': 'Precio Gasolina 98 E5' };
@@ -130,9 +131,18 @@ export default {
     const st = await loadState(env);
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     // Con Ford real: aparcado, una consulta cada 5 min; en marcha, cada minuto.
-    const poll = src(env) !== 'ford' || st.trip || minute % 5 === 0;
+    const poll = src(env) !== 'ford' || st.trip || minute % 5 === 0 || (st.pollUntil && Date.now() < st.pollUntil) || (st.parkChecks && st.parkChecks.length);
     if (poll) {
       try { await ingest(env, await readCar(env), st); } catch (e) { console.error('ingest', e); }
+    }
+    // Tras aparcar: comprobar si se ha cerrado (el coche no avisa solo de que lo has cerrado)
+    const stp = await loadState(env);
+    if (src(env) === 'ford' && stp.parkChecks && stp.parkChecks.length && Date.now() >= stp.parkChecks[0]) {
+      stp.parkChecks.shift();
+      if (!stp.parkChecks.length) stp.parkChecks = null;
+      stp.pollUntil = Date.now() + 240e3; // preguntar cada minuto un rato para ver la respuesta
+      await stateStmt(env.DB, stp).run();
+      try { await fordRefresh(env, { auto: true, every: 1, wake: true }); } catch (e) { console.error('parkcheck', e); }
     }
     // En marcha el coche casi no manda nada por su cuenta: se le pide el estado cada 2 min la primera hora
     // y cada 5 min después (viajes largos), hasta 8 h por trayecto.
@@ -156,7 +166,12 @@ async function readCar(env) {
   car.circuit = here ? here.name : null;
   if (here) { track.active = true; track.auto = true; track.circuit = here.name; }
   car.track = track.active ? track : null;
-  car.alerts = Object.entries(carAlerts(car)).filter(([k]) => !(track.active && k.startsWith('tyre_'))).map(([, v]) => v);
+  // Recién aparcado y aún sin dato de cierre: se está comprobando (no asustar con "Abierto")
+  const stRow = await env.DB.prepare("SELECT v FROM kv WHERE k = 'state'").first();
+  const stNow = stRow ? JSON.parse(stRow.v) : {};
+  car.lock_checking = car.locked === false && car.ignition === 'off' && !!(stNow.parkChecks && stNow.parkChecks.length) ||
+    (car.locked === false && car.ignition === 'off' && stNow.parked && Date.now() - stNow.parked.ts < UNLOCKED_GRACE_S * 1000);
+  car.alerts = Object.entries(carAlerts(car)).filter(([k]) => !(track.active && k.startsWith('tyre_')) && !(car.lock_checking && (k === 'unlocked' || k === 'open'))).map(([, v]) => v);
   return car;
 }
 
@@ -358,7 +373,7 @@ async function fordRefresh(env, opts = {}) {
   const r = await fetch(`${FORD.TMC}/v1/command/vehicles/${f.vin}/commands`, {
     method: 'POST',
     headers: { authorization: 'Bearer ' + f.tmc, 'content-type': 'application/json', 'user-agent': FORD.UA },
-    body: JSON.stringify({ properties: {}, tags: {}, type: 'statusRefresh', wakeUp: !opts.auto })
+    body: JSON.stringify({ properties: {}, tags: {}, type: 'statusRefresh', wakeUp: !opts.auto || !!opts.wake })
   });
   await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('ford_refresh_at', ?)").bind(String(Date.now())).run();
   await env.DB.prepare("DELETE FROM kv WHERE k = 'live_cache'").run();
@@ -573,6 +588,7 @@ function processCar(db, st, c, opts = {}) {
     }
     st.trip = null;
     if (c.location) st.parked = { ts: c.ts, lat: c.location.lat, lon: c.location.lon };
+    st.parkChecks = PARK_CHECKS_S.map(x => (c.data_ts || c.ts) + x * 1000);
   } else if (opts.guard && c.location && st.parked && distKm(st.parked.lat, st.parked.lon, c.location.lat, c.location.lon) > 0.3 && !st.movedAlerted) {
     st.movedAlerted = true;
     notes.push({ title: '⚠️ El coche se ha movido', body: 'Se ha desplazado más de 300 m con el motor apagado (¿grúa?). Revisa la ubicación.', url: '#estado', tag: 'moved', urgent: true });
@@ -596,10 +612,12 @@ function processCar(db, st, c, opts = {}) {
   }
 
   // Avisos (solo cuando aparecen)
+  if (st.parkChecks && (c.locked || (c.ignition && c.ignition !== 'off'))) st.parkChecks = null; // ya cerrado (o vuelve a arrancar)
   const cur = carAlerts(c);
-  if (cur.unlocked) {
+  if (cur.unlocked || cur.open) {
     st.unlockedSince = st.unlockedSince || c.ts;
-    if (c.ts - st.unlockedSince < UNLOCKED_GRACE_S * 1000) delete cur.unlocked;
+    // Margen tras aparcar: la lectura de "apagado" llega con la puerta aún abierta
+    if (c.ts - st.unlockedSince < UNLOCKED_GRACE_S * 1000) { delete cur.unlocked; delete cur.open; }
   } else st.unlockedSince = null;
   if (c.track) for (const k in cur) if (k.startsWith('tyre_')) delete cur[k];
   for (const k in cur) {
