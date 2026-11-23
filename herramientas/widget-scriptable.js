@@ -159,7 +159,7 @@ if (!d) {
   const kv = (k, v, col = TX) => { const s = c3.addStack(); txt(s, k, 11, new Color('#c9ced4')); s.addSpacer(); txt(s, v, 11, col, 'bold', true); c3.addSpacer(3); };
   const eng = d.engine_c;
   kv('Motor', eng == null ? '—' : `${eng}°`, eng == null ? TX : eng < 60 ? new Color('#4aa3ff') : eng > 110 ? BAD : TX);
-  kv('Batería', d.battery_v == null ? '—' : `${f2(d.battery_v)} V`, d.battery_v != null && d.battery_v < 12.2 ? WA : TX);
+  kv('Batería', d.battery_v != null ? `${f2(d.battery_v)} V` : d.battery_soc != null ? `${d.battery_soc} %` : '—', (d.battery_v != null && d.battery_v < 12.2) || (d.battery_v == null && d.battery_soc != null && d.battery_soc < 55) ? WA : TX);
   kv('Aceite', d.oil_life_pct == null ? '—' : `${n0(d.oil_life_pct)} %`, d.oil_life_pct != null && d.oil_life_pct < 20 ? WA : TX);
   kv('Km', n0(d.odometer_km));
 

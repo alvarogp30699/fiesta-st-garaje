@@ -369,7 +369,7 @@ function viewEstado(c) {
   const due = maint ? maint.items.filter(i => i.status === 'vencido' || i.status === 'pronto') : [];
   const loc = c.location;
   const best = fuel && fuel.stations && fuel.stations[0];
-  const [bTxt, bCol] = running ? (c.battery_v >= 13.5 ? ['Cargando', C.ok] : ['No carga', C.bad]) : c.battery_v >= 12.4 ? ['Correcta', C.ok] : c.battery_v >= 12.1 ? ['Baja', C.wa] : ['Muy baja', C.bad];
+  const [bTxt, bCol] = running ? (c.battery_v >= 13.5 ? ['Cargando', C.ok] : ['No carga', C.bad]) : c.battery_v == null ? (c.battery_soc == null ? ['Sin dato', C.mu] : c.battery_soc >= 70 ? ['Correcta', C.ok] : c.battery_soc >= 50 ? ['Baja', C.wa] : ['Muy baja', C.bad]) : c.battery_v >= 12.4 ? ['Correcta', C.ok] : c.battery_v >= 12.1 ? ['Baja', C.wa] : ['Muy baja', C.bad];
   const age = Date.now() - (c.data_ts || c.ts);
   const stale = c.source === 'ford' && !running && age > 15 * 60e3;
   return `
@@ -392,7 +392,7 @@ function viewEstado(c) {
   </div>
   <div class="g3">
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Odómetro</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.odometer_km)}</span></div>
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:20px;font-weight:700">${nf(c.battery_v, 1)} V</span><span style="font-size:11px;color:${bCol}">${bTxt}${c.battery_soc != null ? ' · ' + nf(c.battery_soc) + ' %' : ''}${battery && battery.status === 'bajando' ? ' · bajando' : ''}</span></div>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:20px;font-weight:700">${c.battery_v != null ? nf(c.battery_v, 1) + ' V' : c.battery_soc != null ? nf(c.battery_soc) + ' %' : '—'}</span><span style="font-size:11px;color:${bCol}">${bTxt}${c.battery_soc != null && c.battery_v != null ? ' · ' + nf(c.battery_soc) + ' %' : ''}${battery && battery.status === 'bajando' ? ' · bajando' : ''}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Puertas</span><span class="m" style="font-size:20px;font-weight:700;color:${c.lock_checking ? C.wa : open.length ? C.bad : C.ok}">${c.lock_checking ? '…' : open.length ? 'ABIERTO' : 'OK'}</span>${c.lock_checking ? `<span style="font-size:11px;color:${C.wa}">Recién aparcado: comprobando</span>` : open.length ? `<span style="font-size:11px;color:${C.bad}">${esc(open.join(', '))}</span>` : ''}</div>
   </div>
   ${loc ? `<div class="pn" style="padding:10px;display:flex;align-items:center;gap:12px">
@@ -452,7 +452,7 @@ function viewMotor(c) {
   <div class="g3">
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${useOil ? 'Refrig.' : 'Vida aceite'}</span><span class="m" style="font-size:22px;font-weight:700;${useOil && c.coolant_c > 105 ? 'color:' + C.bad : ''}">${useOil ? nf(c.coolant_c) + '°' : nf(c.oil_life_pct) + '%'}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${c.outside_c != null ? 'Exterior' : 'Freno mano'}</span><span class="m" style="font-size:22px;font-weight:700">${c.outside_c != null ? nf(c.outside_c) + '°' : c.parking_brake == null ? '—' : c.parking_brake ? 'ON' : 'OFF'}</span></div>
-    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${nf(c.battery_v, 1)}</span><span style="font-size:11px;color:${running ? (c.battery_v >= 13.4 ? C.ok : C.wa) : '#7d858f'}">${running ? (c.battery_v >= 13.4 ? 'Cargando' : 'Carga baja') : 'En reposo'}</span></div>
+    <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${c.battery_v != null ? nf(c.battery_v, 1) : c.battery_soc != null ? nf(c.battery_soc) + '%' : '—'}</span><span style="font-size:11px;color:${running ? (c.battery_v >= 13.4 ? C.ok : C.wa) : '#7d858f'}">${running ? (c.battery_v >= 13.4 ? 'Cargando' : 'Carga baja') : 'En reposo'}</span></div>
   </div>
   <div class="pn pad col" style="gap:10px">
     <div class="row"><span class="k">Modo circuito</span>${c.track ? `<span class="tag" style="color:${C.ac};border-color:#4a4210">${c.track.auto ? esc(c.track.circuit) : 'Activo hasta las ' + hm(c.track.until)}</span>` : ''}</div>
@@ -564,11 +564,12 @@ function viewTrip(t) {
     ${trow('Motor máximo', nf(t.max_oil), '°C')}${st && st.warm_min != null ? trow('A temperatura en', nf(st.warm_min), 'min') : ''}
     ${t.circuit || t.rpm_high_pct ? trow('Sobre 4.000 rpm', nf(t.rpm_high_pct), '%') : ''}
     ${st && st.highway_pct != null ? trow('Autovía · ciudad', nf(st.highway_pct) + ' · ' + nf(st.city_pct), '%') : ''}
-    ${trow('Gasolina gastada', t.fuel_used_l != null ? nf(t.fuel_used_l, 1) : '—', 'L')}${trow('Consumo', l100 ? nf(l100, 1) : '—', 'l/100')}
+    ${trow('Gasolina gastada', t.fuel_used_l != null ? nf(t.fuel_used_l, 1) : '—', 'L')}${trow('Consumo', l100 ? (t.km < 15 ? '≈' : '') + nf(l100, 1) : '—', 'l/100')}
     ${st && st.alternator_v ? trow('Batería en marcha', nf(st.alternator_v, 2), 'V') : ''}
     ${trow('Coste del trayecto', t.cost_eur != null ? nf(t.cost_eur, 2) : '—', '€', true)}
   </div>
   ${t.price_l ? `<p class="muted" style="padding:0 4px">Coste calculado con ${nf(t.price_l, 3)} €/L (tu último repostaje con precio, o la media de gasolineras cercanas).</p>` : ''}
+  ${t.km < 15 && t.fuel_used_l ? `<p class="muted" style="padding:0 4px">En trayectos cortos el consumo es aproximado: el indicador de gasolina va a saltos de ~0,2 L. El dato fiable es el del depósito entero (en Datos).</p>` : ''}
   ${t.path && t.path.sparse && t.max_speed != null ? `<p class="muted" style="padding:0 4px">El coche mandó pocas lecturas en este trayecto (${t.points.length}), así que el mapa dibuja la ruta más probable por carretera y la velocidad punta no es fiable.</p>` : ''}
   ${t.max_speed == null ? `<p class="muted" style="padding:0 4px">El coche no mandó datos durante este trayecto, solo al arrancar y al apagar: ${t.path ? 'el mapa dibuja la ruta más probable por carretera' : 'el mapa une la salida y la llegada en línea recta'} y no hay velocidad ni rpm.</p>` : `<div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>
   ${chart('Revoluciones', 'rpm', { min: 0, max: Math.max(3000, Math.ceil((t.max_rpm || 0) / 1000) * 1000), fmt: v => nf(v), color: C.blue })}
@@ -703,6 +704,10 @@ function viewDatos() {
   </div>
   ${expensesCard()}
   <div class="pn" style="padding:4px 16px">
+    ${refuels.tank ? `<div class="col" style="gap:6px;padding:12px 0;border-bottom:1px solid #1d2126"><span class="k">Depósito actual · desde el ${new Date(refuels.tank.since).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</span>
+      <div class="g3" style="gap:8px"><span class="col"><span class="m" style="font-size:22px;font-weight:700">${refuels.tank.l100 != null ? nf(refuels.tank.l100, 1) : '—'}</span><span class="muted" style="font-size:11px">l/100 de media</span></span>
+      <span class="col"><span class="m" style="font-size:22px;font-weight:700">${nf(refuels.tank.km)}</span><span class="muted" style="font-size:11px">km · ${nf(refuels.tank.used_l, 1)} L</span></span>
+      <span class="col"><span class="m" style="font-size:22px;font-weight:700">≈${nf(refuels.tank.left_l, 0)} L</span><span class="muted" style="font-size:11px">${refuels.tank.range_km != null ? '≈' + nf(refuels.tank.range_km) + ' km a este ritmo' : 'quedan'}</span></span></div></div>` : ''}
     <div class="row" style="padding:12px 0"><span class="k">Repostajes</span><button class="m" id="copyCsv" style="background:none;border:0;color:${C.ac};font-size:12px;font-weight:600;letter-spacing:.08em;min-height:36px">COPIAR CSV</button></div>
     <label class="btn sec" for="pumpFile" data-pump="" style="margin-bottom:8px;width:100%">📸 Foto del surtidor</label>
     ${rows}

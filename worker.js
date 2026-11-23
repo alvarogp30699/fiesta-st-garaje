@@ -164,6 +164,7 @@ export default {
     await parkingTimer(env);
     await daily(env, event.scheduledTime);
     try { await geoBackfill(env); } catch (e) { console.error('geo', e); }
+    try { await pathBackfill(env); } catch (e) { console.error('ruta', e); }
     try { await weeklyBackup(env, event.scheduledTime); } catch (e) { console.error('copia', e); }
   }
 };
@@ -357,7 +358,8 @@ function mapTelemetry(data) {
     odometer_km: r1(num(val('odometer'))),
     fuel_pct: num(val('fuelLevel')) != null ? r1(Math.min(100, num(val('fuelLevel')))) : null,
     range_km: num(val('fuelRange')) != null ? Math.round(num(val('fuelRange'))) : null,
-    battery_v: num(val('batteryVoltage')) != null ? Math.round(num(val('batteryVoltage')) * 100) / 100 : null,
+    // Con el motor apagado, más de 13,2 V es la tensión de carga que quedó al apagar, no la de reposo: no vale
+    battery_v: (() => { const v = num(val('batteryVoltage')); if (v == null) return null; const off = /OFF/i.test(String(val('ignitionStatus') || '')); return off && v > 13.2 ? null : Math.round(v * 100) / 100; })(),
     tyres,
     tyre_ref,
     tyres_low,
@@ -898,21 +900,39 @@ async function getBattery(env, days) {
   return { days: results, slope: round(slope, 3), status };
 }
 
+async function fuelFactor(env) {
+  const r = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fuel_factor'").first();
+  const f = r ? Number(r.v) : 1;
+  return f > 0.7 && f < 1.3 ? f : 1;
+}
+
 async function getRefuels(env) {
   const { results } = await env.DB.prepare('SELECT * FROM refuels ORDER BY ts').all();
+  const ff = await fuelFactor(env);
   let totalUsed = 0, totalKm = 0;
   const list = results.map((r, i) => {
     const p = results[i - 1];
     let km = null, l100 = null;
     if (p) {
       km = round(r.odometer - p.odometer, 1);
-      const used = ((p.fuel_after - r.fuel_before) / 100) * TANK_L;
+      const used = ((p.fuel_after - r.fuel_before) / 100) * TANK_L * ff;
       if (km > 20 && r.fuel_before != null && p.fuel_after != null) { l100 = round((used / km) * 100, 1); totalUsed += used; totalKm += km; }
     }
     const price_l = r.price_total && r.litres ? round(r.price_total / r.litres, 3) : r.price_l ?? null;
     return { ...r, km, l100, price_l };
   }).reverse();
-  return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L };
+  // Depósito actual: lo más fiable para el consumo (muchos km, sin el error del aforador en trayectos cortos)
+  let tank = null;
+  const last = results[results.length - 1];
+  const now = await env.DB.prepare('SELECT odometer, fuel_pct FROM snapshots WHERE odometer IS NOT NULL AND fuel_pct IS NOT NULL ORDER BY ts DESC LIMIT 1').first();
+  if (last && now && last.fuel_after != null) {
+    const km = round(now.odometer - last.odometer, 0);
+    const used = Math.max(0, (last.fuel_after - now.fuel_pct) / 100 * TANK_L * ff);
+    const left = Math.max(0, TANK_L - (100 - now.fuel_pct) / 100 * TANK_L * ff);
+    const l100 = km >= 50 ? round(used / km * 100, 1) : null;
+    tank = { since: last.ts, km, used_l: round(used, 1), l100, left_l: round(left, 1), range_km: l100 ? Math.round(left / l100 * 100) : null };
+  }
+  return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L, tank };
 }
 
 // Calibra el aforador: litros reales del repostaje frente a lo que marcó el depósito desde el anterior lleno
@@ -1482,19 +1502,6 @@ async function geoName(env, lat, lon) {
       else if (j.name) geoDebug(env, 'poi lejos ' + j.name + ' ' + round(d * 1000) + 'm');
     } else geoDebug(env, 'poi HTTP ' + r.status);
   } catch (e) { geoDebug(env, 'poi ' + e.message); }
-  // Si no hay, Overpass (todos los comercios a menos de 70 m)
-  if (!poi) try {
-    const q = `[out:json][timeout:8];(nwr(around:70,${lat},${lon})["name"]["shop"];nwr(around:70,${lat},${lon})["name"]["amenity"];nwr(around:70,${lat},${lon})["name"]["tourism"];nwr(around:70,${lat},${lon})["name"]["leisure"];);out center tags 30;`;
-    const r = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { ...UA, 'content-type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) });
-    if (r.ok) {
-      const j = await r.json();
-      const best = (j.elements || [])
-        .filter(e => e.tags && e.tags.name && !POI_SKIP.test(e.tags.amenity || ''))
-        .map(e => { const la = e.lat ?? e.center?.lat, lo = e.lon ?? e.center?.lon; return { n: e.tags.brand && !e.tags.name.includes(e.tags.brand) ? e.tags.brand : e.tags.name, d: la != null ? distKm(lat, lon, la, lo) : 1, shop: !!e.tags.shop }; })
-        .sort((x, y) => (x.d - (x.shop ? 0.02 : 0)) - (y.d - (y.shop ? 0.02 : 0)))[0];
-      if (best) poi = best.n;
-    } else geoDebug(env, 'overpass HTTP ' + r.status);
-  } catch (e) { geoDebug(env, 'overpass ' + e.message); }
   let name = poi ? (town && !poi.toLowerCase().includes(town.toLowerCase()) ? `${poi} ${town}` : poi)
     : road ? (town ? `${road}, ${town}` : road) : town;
   if (!name && failed) return null; // reintentar más tarde
@@ -1525,6 +1532,14 @@ async function geoBackfill(env) {
     await geoName(env, la, lo);
     return;
   }
+}
+
+// En el cron: calcula la ruta por carretera de un trayecto antiguo cada minuto
+async function pathBackfill(env) {
+  const t = await env.DB.prepare("SELECT * FROM trips WHERE path IS NULL AND COALESCE(track, 0) = 0 AND circuit IS NULL AND id NOT IN (SELECT CAST(v AS INTEGER) FROM kv WHERE k LIKE 'nopath_%') ORDER BY start_ts DESC LIMIT 1").first();
+  if (!t) return;
+  const p = await tripPath(env, t, JSON.parse(t.points || '[]'));
+  if (!p) await env.DB.prepare('INSERT OR REPLACE INTO kv VALUES (?, ?)').bind('nopath_' + t.id, String(t.id)).run();
 }
 
 function tripPlaces(pts, places) {
@@ -1674,7 +1689,7 @@ async function widget(env) {
   const c = await getLive(env); // lo que lee el widget también cuenta para detectar el arranque
   return {
     range_km: c.range_km, fuel_pct: c.fuel_pct, locked: c.locked, doors_open: c.doors_open || [],
-    tyres: c.tyres, tyres_low: c.tyres_low || [], battery_v: c.battery_v, odometer_km: c.odometer_km,
+    tyres: c.tyres, tyres_low: c.tyres_low || [], battery_v: c.battery_v, battery_soc: c.battery_soc ?? null, odometer_km: c.odometer_km,
     alerts: c.alerts || [], data_ts: c.data_ts || c.ts, circuit: c.circuit || null,
     lock_checking: !!c.lock_checking, windows_open: c.windows_open || [],
     engine_c: c.oil_c ?? c.coolant_c ?? null, oil_life_pct: c.oil_life_pct ?? null, battery_soc: c.battery_soc ?? null,
@@ -1811,7 +1826,7 @@ async function exportAll(env) {
     all('SELECT * FROM refuels ORDER BY ts'),
     all('SELECT * FROM trips ORDER BY start_ts'),
     all('SELECT * FROM maintenance ORDER BY id'),
-    all("SELECT k, v FROM kv WHERE k NOT IN ('ford', 'vapid', 'ford_raw', 'ford_raw_at', 'live_cache', 'state', 'daily') AND k NOT LIKE 'fuel_cache_%'")
+    all("SELECT k, v FROM kv WHERE k NOT IN ('ford', 'vapid', 'ford_raw', 'ford_raw_at', 'live_cache', 'state', 'daily') AND k NOT LIKE 'fuel_cache_%' AND k NOT LIKE 'nopath_%' AND k NOT IN ('geo_dbg', 'route_err')")
   ]);
   return { app: 'fiesta-st-garaje', schema: SCHEMA, exported_at: new Date().toISOString(), source: src(env) || 'mock', snapshots, refuels, trips, maintenance, settings: kv };
 }
