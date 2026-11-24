@@ -879,7 +879,8 @@ function wheelNotes(c, ts) {
     const f = [m('fl'), m('fr')].filter(v => v != null), r = [m('rl'), m('rr')].filter(v => v != null);
     if (f.length && r.length) {
       const df = r.reduce((a, b) => a + b, 0) / r.length - f.reduce((a, b) => a + b, 0) / f.length;
-      if (df >= 0.8) out.push(['i', `Las delanteras están ${nf(df, 1)} mm más gastadas que las traseras (normal en un tracción delantera). ${ts.rotate_in_km != null && ts.rotate_in_km <= 0 ? 'Toca permutar.' : ts.rotate_in_km != null ? `Permútalas en ${nf(ts.rotate_in_km)} km para igualarlas.` : 'Permútalas para igualarlas.'}`]);
+      if (df >= 1.5) out.push(['w', `Las delanteras están ${nf(df, 1)} mm más gastadas que las traseras: permútalas ya, aunque no hayan pasado los 10.000 km. Con tanta diferencia el coche se descompensa y las delanteras se acaban antes.`]);
+      else if (df >= 0.8) out.push(['i', `Las delanteras están ${nf(df, 1)} mm más gastadas que las traseras (normal en un tracción delantera). ${ts.rotate_in_km != null && ts.rotate_in_km <= 0 ? 'Toca permutar.' : ts.rotate_in_km != null ? `Permútalas en ${nf(ts.rotate_in_km)} km o cuando la diferencia llegue a 1,5 mm, lo que pase antes.` : 'Permútalas cuando la diferencia llegue a 1,5 mm.'}`]);
       else if (df <= -0.8) out.push(['w', `Las traseras están ${nf(-df, 1)} mm más gastadas que las delanteras: es raro en un tracción delantera. Revisa la alineación trasera.`]);
     }
     for (const [a, b] of [['fl', 'fr'], ['rl', 'rr']]) {
@@ -924,8 +925,10 @@ function tyreCard() {
   if (!t) return '';
   if (!t.model && t.mounted_km == null) return `<button class="pn pad col" data-tyreset style="gap:6px;text-align:left"><span class="k">Neumáticos</span><span style="font-size:15px">Añade qué ruedas llevas y cuándo las montaste para contar sus km.</span></button>`;
   const rot = t.rotate_in_km;
+  const L = t.tread_last, fm = L ? [zoneMin(L.fl), zoneMin(L.fr)].filter(v => v != null) : [], rm = L ? [zoneMin(L.rl), zoneMin(L.rr)].filter(v => v != null) : [];
+  const diffRot = fm.length && rm.length && (rm.reduce((a, b) => a + b, 0) / rm.length - fm.reduce((a, b) => a + b, 0) / fm.length) >= 1.5;
   return `<div class="pn pad col" style="gap:10px">
-    <div class="row"><span class="k">Neumáticos</span>${rot != null ? `<span class="tag" style="color:${rot <= 0 ? C.wa : C.ok};border-color:${rot <= 0 ? C.wa : C.ok}55">${rot <= 0 ? 'Toca rotar' : 'Rotar en ' + nf(rot) + ' km'}</span>` : ''}</div>
+    <div class="row"><span class="k">Neumáticos</span>${diffRot ? `<span class="tag" style="color:${C.wa};border-color:${C.wa}55">Toca rotar (desgaste)</span>` : rot != null ? `<span class="tag" style="color:${rot <= 0 ? C.wa : C.ok};border-color:${rot <= 0 ? C.wa : C.ok}55">${rot <= 0 ? 'Toca rotar' : 'Rotar en ' + nf(rot) + ' km'}</span>` : ''}</div>
     <div class="col" style="gap:2px"><span style="font-size:16px;font-weight:600">${esc(t.model || 'Sin modelo')}</span><span class="muted">${esc(t.size || '')}${t.mounted_date ? ' · montadas el ' + new Date(t.mounted_date).toLocaleDateString('es-ES') : ''}</span></div>
     <div class="g3" style="gap:8px">
       <div class="col" style="gap:2px"><span class="k">Total</span><span class="m" style="font-size:20px;font-weight:700">${t.km != null ? nf(t.km) : '—'}<span style="font-size:12px;color:#7d858f"> km</span></span></div>
