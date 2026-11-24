@@ -1,5 +1,5 @@
 """
-Conecta tu cuenta de Ford con el servidor de Fiesta ST Garaje.
+Conecta tu cuenta de Ford con el servidor de tu app del coche.
 
 Uso (dentro del Codespace):
     python herramientas/conectar_ford.py
@@ -167,8 +167,8 @@ async def capture_code(auth_url: str) -> str:
 
 
 def main() -> None:
-    print('━━━ Conectar tu Fiesta ST con Ford ━━━\n')
-    worker = (os.environ.get('FIESTA_URL') or input('URL de tu servidor (https://fiesta-st-api…workers.dev): ')).strip().rstrip('/')
+    print('━━━ Conectar tu coche con Ford ━━━\n')
+    worker = (os.environ.get('FIESTA_URL') or input('URL de tu servidor (https://…workers.dev): ')).strip().rstrip('/')
     if not worker.startswith('https://'):
         raise SystemExit('❌ La URL tiene que empezar por https://')
     key = os.environ.get('FIESTA_KEY') or getpass.getpass('Contraseña de la app (APP_KEY, no se ve al escribir): ')
@@ -230,7 +230,7 @@ def main() -> None:
         print('Hay varios coches:')
         for i, v in enumerate(vins, 1):
             print(f'  {i}. …{v[-6:]}')
-        vin = vins[int(input('Número del Fiesta ST: ') or 1) - 1]
+        vin = vins[int(input('Número de tu coche: ') or 1) - 1]
     print(f'✅ Coche encontrado (VIN …{vin[-6:]}). Enviando a tu servidor…')
     tokens = {'cat': cat['access_token'], 'cat_refresh': cat['refresh_token'], 'vin': vin}
     with open(TOKENS_FILE, 'w') as fh:
@@ -246,7 +246,7 @@ def send(worker: str, key: str, tokens: dict) -> None:
     if not res.get('ok'):
         raise SystemExit(f'⚠️  Tokens guardados, pero la primera lectura del coche ha fallado:\n{res.get("error")}\n\nCópiame este mensaje en el chat.')
     s = res.get('summary', {})
-    print('\n🎉 ¡Conectado! Primera lectura de tu Fiesta ST:')
+    print('\n🎉 ¡Conectado! Primera lectura de tu coche:')
     for k, label in [('fuel_pct', 'Combustible (%)'), ('range_km', 'Autonomía (km)'), ('odometer_km', 'Odómetro (km)'),
                      ('battery_v', 'Batería (V)'), ('ignition', 'Motor'), ('fields', 'Datos recibidos')]:
         print(f'   {label}: {s.get(k)}')

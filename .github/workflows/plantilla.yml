@@ -1,0 +1,24 @@
+# Mantiene la carpeta plantilla/ al día con el servidor y la herramienta de Ford,
+# para que quien instale la app con el botón "Deploy to Cloudflare" tenga siempre la última versión.
+name: Actualizar plantilla
+on:
+  push:
+    branches: [main]
+    paths: [worker.js, herramientas/conectar_ford.py, herramientas/LEEME.md, .devcontainer/devcontainer.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          cp worker.js plantilla/worker.js
+          cp herramientas/conectar_ford.py herramientas/LEEME.md plantilla/herramientas/
+          cp .devcontainer/devcontainer.json plantilla/.devcontainer/devcontainer.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add plantilla
+          git diff --cached --quiet || git commit -m "Plantilla al día con el servidor"
+          git push

@@ -4,7 +4,7 @@
 // SOURCE = "mock" (coche simulado) o "ford" (coche real).
 
 const SCHEMA = '3';
-const TANK_L = 45;               // depósito Fiesta ST Mk8
+let TANK_L = 45;                 // depósito (Fiesta ST Mk8: 45 L); se cambia en Ajustes → Tu coche
 const LIVE_MIN_INTERVAL_S = 30;  // con Ford real: no consultar más a menudo
 const GAP_PARKED_S = 300;        // registro del histórico aparcado
 const GAP_DRIVING_S = 60;        // registro del histórico en marcha
@@ -110,6 +110,8 @@ export default {
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
       if (m === 'GET' && p === '/api/fuel/advice') return json(await refuelAdvice(env));
       if (m === 'GET' && p === '/api/engine') return json(await engineStats(env, clampInt(url.searchParams.get('days'), 7, 365, 30)));
+      if (m === 'GET' && p === '/api/car-config') return json(await carConfig(env));
+      if (m === 'POST' && p === '/api/car-config') return json(await setCarConfig(env, await req.json()));
       if (m === 'GET' && p === '/api/month') return json(await monthSummary(env, url.searchParams.get('m')));
       if (m === 'GET' && p === '/api/backups') return json(await listBackups(env));
       if (m === 'GET' && p.startsWith('/api/backups/')) return json(await getBackup(env, decodeURIComponent(p.slice(13))));
@@ -816,6 +818,7 @@ async function prepare(env) {
   ]);
   const ccRow = ccRes;
   try { CUSTOM_CIRCUITS = JSON.parse((ccRow && ccRow.results[0] && ccRow.results[0].v) || '[]'); } catch (e) { CUSTOM_CIRCUITS = []; }
+  try { const cc = await db.prepare("SELECT v FROM kv WHERE k = 'car_cfg'").first(); if (cc) { const o = JSON.parse(cc.v); if (o.tank_l > 20 && o.tank_l < 150) TANK_L = o.tank_l; } } catch (e) {}
   try { const g = await db.prepare("SELECT v FROM kv WHERE k = 'gear_ratios'").first(); if (g) { const a = JSON.parse(g.v); if (Array.isArray(a) && a.length === 6) GEAR_KMH_PER_1000 = a; } } catch (e) {}
   const s = (srcRow.results && srcRow.results[0] && srcRow.results[0].v) || env.SOURCE || 'mock';
   if (ready && s === SRC) return;
@@ -1081,6 +1084,25 @@ async function pumpPhoto(env, ts) {
   const [, b64] = ph.split(',');
   const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   return new Response(bin, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400', 'access-control-allow-origin': '*' } });
+}
+
+// ---------- Tu coche: nombre, modelo y depósito (para que la app valga para cualquier Ford conectado) ----------
+async function carConfig(env) {
+  const r = await env.DB.prepare("SELECT v FROM kv WHERE k = 'car_cfg'").first();
+  const o = r ? JSON.parse(r.v) : {};
+  return { name: o.name || 'MI ST', model: o.model || 'Fiesta ST · Mk8', tank_l: o.tank_l || TANK_L };
+}
+async function setCarConfig(env, b) {
+  const cur = await carConfig(env);
+  const t = Number(String(b.tank_l ?? '').replace(',', '.'));
+  const o = {
+    name: String(b.name ?? cur.name).trim().slice(0, 20) || cur.name,
+    model: String(b.model ?? cur.model).trim().slice(0, 40) || cur.model,
+    tank_l: t > 20 && t < 150 ? Math.round(t) : cur.tank_l
+  };
+  await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('car_cfg', ?)").bind(JSON.stringify(o)).run();
+  TANK_L = o.tank_l;
+  return o;
 }
 
 // ---------- Siri: "¿Cómo está el coche?" ----------

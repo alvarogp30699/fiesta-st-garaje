@@ -134,7 +134,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, engine = null, lastTrip = null, viajesPeriod = 'semana', tripFilter = 'todos', tripsAll = false, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let carCfg = (() => { try { return JSON.parse(localStorage.getItem('fst_car') || 'null'); } catch (e) { return null; } })(), fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, engine = null, lastTrip = null, viajesPeriod = 'semana', tripFilter = 'todos', tripsAll = false, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -192,6 +192,7 @@ async function loadFor(t, force) {
   }
   if (t === 'datos') add('datos', 120e3, async () => { [hist, refuels] = await Promise.all([api('/api/history?days=7'), api('/api/refuels')]); });
   if (t === 'datos') add('favhist', 600e3, async () => { favHist = await api('/api/fuel/fav/prices'); });
+  add('carcfg', 3600e3, async () => { carCfg = await api('/api/car-config'); try { localStorage.setItem('fst_car', JSON.stringify(carCfg)); } catch (e) {} });
   if (t === 'estado') add('lasttrip', 120e3, async () => { const r = await api('/api/trips?limit=1'); lastTrip = r.trips && r.trips[0] || null; });
   if (t === 'estado' || t === 'datos') add('advice', 900e3, async () => { advice = await api('/api/fuel/advice'); });
   if (t === 'viajes') add('month', 600e3, async () => { monthSum = await api('/api/month'); });
@@ -1104,6 +1105,15 @@ function viewAjustes() {
   <p class="muted">La conexión se guarda solo en este móvil.</p>`;
   return `
   ${cfg.url ? '' : serverForm}
+  <form class="pn pad col" id="carForm" style="gap:10px">
+    <span class="k">Tu coche</span>
+    <div class="g2">
+      <label for="cName">Nombre corto<input id="cName" maxlength="20" value="${esc((carCfg && carCfg.name) || 'MI ST')}"></label>
+      <label for="cTank">Depósito (L)<input id="cTank" inputmode="numeric" value="${esc(String((carCfg && carCfg.tank_l) || 45))}"></label>
+    </div>
+    <label for="cModel">Modelo<input id="cModel" maxlength="40" value="${esc((carCfg && carCfg.model) || 'Fiesta ST · Mk8')}"></label>
+    <button class="btn sec" type="submit">Guardar</button>
+  </form>
   <div class="pn pad col" style="gap:10px">
     <span class="k">Gasolina que usas</span>
     <div class="seg-pick" role="group" aria-label="Tipo de gasolina">
@@ -1332,7 +1342,7 @@ function renderBadge() {
     : live.locked === false ? `<span class="chip" style="color:${C.bad}"><i></i>Abierto</span>` : `<span class="chip" style="color:${C.ok}"><i></i>Cerrado</span>`;
   const src = live && live.source === 'mock' ? `<span class="chip" style="color:${C.wa}">Prueba</span>` : '';
   $('#badge').innerHTML = tab === 'ajustes' ? '' : tab === 'estado' ? state : src;
-  const [sub, title] = tripDetail && tab === 'viajes' ? [`${dayLabel(tripDetail.start_ts)} · ${hm(tripDetail.start_ts)} → ${hm(tripDetail.end_ts)}`, (tripDetail.from || tripDetail.to ? `${(tripDetail.from || '…').toUpperCase()} → ${(tripDetail.to || '…').toUpperCase()}` : `TRAYECTO #${pad2(tripDetail.id)}`)] : TITLES[tab];
+  const [sub, title] = tripDetail && tab === 'viajes' ? [`${dayLabel(tripDetail.start_ts)} · ${hm(tripDetail.start_ts)} → ${hm(tripDetail.end_ts)}`, (tripDetail.from || tripDetail.to ? `${(tripDetail.from || '…').toUpperCase()} → ${(tripDetail.to || '…').toUpperCase()}` : `TRAYECTO #${pad2(tripDetail.id)}`)] : tab === 'estado' && carCfg ? [carCfg.model, carCfg.name.toUpperCase()] : TITLES[tab];
   $('#hSub').textContent = sub; $('#hTitle').textContent = title;
 }
 
@@ -1500,6 +1510,11 @@ function bindSettings() {
       guard = await api('/api/guard', { method: 'POST', body: JSON.stringify({ enabled: $('#gEnabled').checked, night: $('#gNight').checked, from: $('#gFrom').value, to: $('#gTo').value }) });
       loaded.guard = Date.now(); flash('Vigilancia guardada');
     } catch (e) { error = e.message; render(); }
+  };
+  const cf = $('#carForm'); if (cf) cf.onsubmit = async ev => {
+    ev.preventDefault();
+    try { carCfg = await api('/api/car-config', { method: 'POST', body: JSON.stringify({ name: $('#cName').value, model: $('#cModel').value, tank_l: $('#cTank').value }) }); localStorage.setItem('fst_car', JSON.stringify(carCfg)); flash('Guardado'); }
+    catch (e) { flash('No se ha podido guardar: ' + e.message); }
   };
   const cs = $('#copySiri'); if (cs) cs.onclick = async () => { try { await navigator.clipboard.writeText(cfg.url.replace(/\/+$/, '') + '/api/siri?k=' + encodeURIComponent(cfg.key)); flash('Dirección copiada (con tu contraseña: no la compartas)'); } catch (e) { flash('No se ha podido copiar'); } };
   const tsi = $('#testSiri'); if (tsi) tsi.onclick = async () => {

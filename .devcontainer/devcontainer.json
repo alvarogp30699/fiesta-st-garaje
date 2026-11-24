@@ -1,15 +1,15 @@
 {
-  "name": "Conectar Fiesta ST con Ford",
+  "name": "Conectar tu coche con Ford",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
   "features": {
     "ghcr.io/devcontainers/features/desktop-lite:1": {
-      "password": "fiesta",
+      "password": "coche",
       "webPort": "6080"
     }
   },
   "forwardPorts": [6080],
   "portsAttributes": {
-    "6080": { "label": "Escritorio (contraseña: fiesta)", "onAutoForward": "notify" }
+    "6080": { "label": "Escritorio (contraseña: coche)", "onAutoForward": "notify" }
   },
   "containerEnv": { "DISPLAY": ":1" },
   "postCreateCommand": "pip install --user playwright && python -m playwright install --with-deps chromium",
