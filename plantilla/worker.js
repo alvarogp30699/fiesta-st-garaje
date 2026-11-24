@@ -1934,7 +1934,8 @@ async function getTyreSet(env) {
     const zmin = z => z == null ? null : typeof z === 'number' ? z : Math.min(...[z.o, z.c, z.i].filter(v => v != null));
     const minOf = x => Math.min(...['fl', 'fr', 'rl', 'rr'].map(k => zmin(x[k])).filter(v => v != null));
     const last = tr[tr.length - 1], lastMin = minOf(last);
-    const newMm = t.new_mm || 6.5; // Eagle F1 SuperSport 225/40 R18 nueva: ~6-7 mm según la fuente
+    // Dibujo de nuevas: el que pongas; si no, Eagle F1 SuperSport 225/40 R18 = 9/32" ≈ 7,1 mm (ficha de la medida); otros, 7,5 mm
+    const newMm = t.new_mm || (/supersport/i.test(t.model || '') ? 7.1 : 7.5);
     let rate = null; // mm por cada 1.000 km
     if (tr.length >= 2 && last.km - tr[0].km >= 2000) rate = (minOf(tr[0]) - lastMin) / ((last.km - tr[0].km) / 1000);
     if (!(rate > 0) && last.km - t.mounted_km >= 2000) rate = (newMm - lastMin) / ((last.km - t.mounted_km) / 1000);

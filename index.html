@@ -948,9 +948,9 @@ function viewTaller() {
 const WHEEL = { fl: 'delantera izquierda', fr: 'delantera derecha', rl: 'trasera izquierda', rr: 'trasera derecha' };
 const zoneMin = z => z == null ? null : typeof z === 'number' ? z : (v => v.length ? Math.min(...v) : null)([z.o, z.c, z.i].filter(v => v != null));
 // Color continuo: rojo en 1,6 mm → amarillo → verde con el dibujo de nuevas (así se ven las diferencias entre zonas)
-const mmCol = (v, nw = 6.5) => { if (v == null) return '#2a2f35'; const f = Math.max(0, Math.min(1, (v - 1.6) / (nw - 1.6))); return `hsl(${Math.round(f * 140)} 70% ${46 + f * 4}%)`; };
+const mmCol = (v, nw = 7.1) => { if (v == null) return '#2a2f35'; const f = Math.max(0, Math.min(1, (v - 1.6) / (nw - 1.6))); return `hsl(${Math.round(f * 140)} 70% ${46 + f * 4}%)`; };
 function wheelsSvg(c, L) {
-  const W = 340, H = 340, tw = 90, th = 108, nw = (tyreSet && tyreSet.new_mm) || 6.5;
+  const W = 340, H = 340, tw = 90, th = 108, nw = (tyreSet && tyreSet.new_mm) || 7.1;
   const pos = { fl: [8, 52, 'L'], fr: [242, 52, 'R'], rl: [8, 200, 'L'], rr: [242, 200, 'R'] };
   const t = (c && c.tyres) || {}, ref = (c && c.tyre_ref) || {};
   let g = `<rect x="108" y="40" width="124" height="282" rx="44" fill="#16191d" stroke="#2a2f35"/>
@@ -1046,7 +1046,7 @@ function wheelsCard() {
     <div class="row"><span class="k">Ruedas · dibujo y presiones</span>${L ? `<span style="font-size:11px;color:#7d858f">medido el ${new Date(L.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</span>` : ''}</div>
     ${wheelsSvg(c, L)}
     <div class="row" style="justify-content:center;gap:12px;font-size:11px;color:#7d858f;flex-wrap:wrap">
-      <span style="display:inline-flex;align-items:center;gap:6px">1,6 mm<span style="display:inline-block;width:70px;height:8px;border-radius:4px;background:linear-gradient(90deg,hsl(0 70% 46%),hsl(70 70% 48%),hsl(140 70% 50%))"></span>nueva (${nf((ts && ts.new_mm) || 6.5, 1)})</span><span><span style="color:${C.wa}">bar</span> baja · <span style="color:${C.blue}">bar</span> alta</span>
+      <span style="display:inline-flex;align-items:center;gap:6px">1,6 mm<span style="display:inline-block;width:70px;height:8px;border-radius:4px;background:linear-gradient(90deg,hsl(0 70% 46%),hsl(70 70% 48%),hsl(140 70% 50%))"></span>nueva (${nf((ts && ts.new_mm) || 7.1, 1)})</span><span><span style="color:${C.wa}">bar</span> baja · <span style="color:${C.blue}">bar</span> alta</span>
     </div>
     <div class="col" style="gap:8px">${wheelNotes(c, ts)}</div>
     <div class="btns"><button class="btn sec" data-tread>Medir dibujo</button></div>
@@ -1242,7 +1242,7 @@ function sheetHtml() {
     return `<form class="sheet" id="sheetForm" style="max-height:88vh;overflow:auto">
       <span class="k">Profundidad del dibujo (mm)</span>
       ${wheel('fl', 'Delantera izquierda')}${wheel('fr', 'Delantera derecha')}${wheel('rl', 'Trasera izquierda')}${wheel('rr', 'Trasera derecha')}
-      <label for="trNew">Dibujo de nuevas (mm)<input id="trNew" inputmode="decimal" placeholder="${nf((tyreSet && tyreSet.new_mm) || 6.5, 1)}"></label>
+      <label for="trNew">Dibujo de nuevas (mm)<input id="trNew" inputmode="decimal" placeholder="${nf((tyreSet && tyreSet.new_mm) || 7.1, 1)}"></label>
       <p class="muted">Ext. = lado de fuera del coche, Int. = lado de dentro. Mide en un surco de cada zona. Puedes rellenar solo el centro si no tienes tiempo. Sin medidor: con una moneda de 1 €, si se ve entera la franja dorada quedan unos 3 mm o menos.</p>
       <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
     </form>`;
