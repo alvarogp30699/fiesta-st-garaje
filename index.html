@@ -134,7 +134,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, engine = null, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, engine = null, lastTrip = null, viajesPeriod = 'semana', tripFilter = 'todos', tripsAll = false, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -178,7 +178,7 @@ async function loadFor(t, force) {
   if (t === 'ajustes') add('guard', 30e3, async () => { guard = await api('/api/guard'); });
   if (t === 'ajustes') add('tyres', 300e3, async () => { tyrePrefs = await api('/api/tyres'); });
   if (t === 'ajustes') add('fordst', 60e3, async () => { [fordSt, backups] = await Promise.all([api('/api/ford/status'), api('/api/backups').catch(() => ({ backups: [] }))]); });
-  if (t === 'estado' || t === 'datos') add('battery', 300e3, async () => { battery = await api('/api/battery'); });
+  if (t === 'estado' || t === 'motor') add('battery', 300e3, async () => { battery = await api('/api/battery'); });
   if (t === 'taller') { add('tyreset', 60e3, async () => { tyreSet = await api('/api/tyreset'); }); add('deadlines', 60e3, async () => { deadlines = (await api('/api/deadlines')).items; }); }
   if (t === 'viajes') add('trackdays', 120e3, async () => { trackdays = (await api('/api/trackdays')).days; });
   if (t === 'estado' || t === 'taller') add('maint', t === 'taller' ? 30e3 : 300e3, async () => { maint = await api('/api/maintenance'); });
@@ -186,13 +186,14 @@ async function loadFor(t, force) {
     try { fuel = await api('/api/fuel?type=' + cfg.fuel); fuelErr = null; } catch (e) { fuelErr = e.message; }
   });
   if (t === 'viajes') {
-    add('trips', 60e3, async () => { const r = await api('/api/trips?limit=60'); trips = r.trips; commute = r.commute; places = r.places || []; });
+    add('trips', 60e3, async () => { const r = await api('/api/trips?limit=200'); trips = r.trips; commute = r.commute; places = r.places || []; });
     add('records', 300e3, async () => { records = await api('/api/trips/records'); });
     add('circuits', 300e3, async () => { const r = await api('/api/circuits'); circuits = r.circuits; customCircuits = r.custom || []; });
   }
   if (t === 'datos') add('datos', 120e3, async () => { [hist, refuels] = await Promise.all([api('/api/history?days=7'), api('/api/refuels')]); });
   if (t === 'datos') add('favhist', 600e3, async () => { favHist = await api('/api/fuel/fav/prices'); });
-  if (t === 'datos') add('advice', 900e3, async () => { advice = await api('/api/fuel/advice'); });
+  if (t === 'estado') add('lasttrip', 120e3, async () => { const r = await api('/api/trips?limit=1'); lastTrip = r.trips && r.trips[0] || null; });
+  if (t === 'estado' || t === 'datos') add('advice', 900e3, async () => { advice = await api('/api/fuel/advice'); });
   if (t === 'viajes') add('month', 600e3, async () => { monthSum = await api('/api/month'); });
   if (t === 'motor') add('engine', 600e3, async () => { engine = await api('/api/engine?days=30'); });
   if (t === 'datos') add('expenses', 120e3, async () => { expenses = await api('/api/expenses'); });
@@ -209,9 +210,11 @@ function schedule() {
 }
 
 // ---------- Formatos ----------
+function titleCaseJs(t) { return String(t || '').toLowerCase().replace(/(^|[\s-])\p{L}/gu, m => m.toUpperCase()); }
 function ago(ts) {
   const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 60) return 'hace ' + Math.max(s, 0) + ' s';
+  if (s < 30) return 'ahora mismo';
+  if (s < 60) return 'hace ' + s + ' s';
   if (s < 3600) return 'hace ' + Math.round(s / 60) + ' min';
   if (s < 86400) return 'hace ' + Math.round(s / 3600) + ' h';
   return 'hace ' + Math.round(s / 86400) + ' d';
@@ -393,7 +396,7 @@ function viewEstado(c) {
     <div class="col" style="gap:6px">
       <span class="k">Autonomía</span>
       <span class="m" style="font-size:52px;font-weight:700;line-height:.9"><span data-count="${c.range_km}">${nf(c.range_km)}</span><span style="font-size:18px;color:#7d858f;margin-left:4px">km</span></span>
-      <span style="font-size:13px;color:#7d858f">${refuels && refuels.avg_l100 ? nf(refuels.avg_l100, 1) + ' l/100 km · ' : ''}dato del coche ${ago(c.data_ts || c.ts)}</span>
+      <span style="font-size:13px;color:#7d858f">${refuels && ((refuels.tank && refuels.tank.l100) || refuels.avg_l100) ? nf((refuels.tank && refuels.tank.l100) || refuels.avg_l100, 1) + ' l/100 km · ' : ''}dato del coche ${ago(c.data_ts || c.ts)}</span>
     </div>
   </div>
   <button class="pn" data-goruedas aria-label="Ver ruedas en detalle" style="padding:14px 16px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;text-align:left;color:inherit;width:100%;position:relative">
@@ -416,11 +419,23 @@ function viewEstado(c) {
     </button>
     <a class="btn" href="https://maps.apple.com/?daddr=${loc.lat},${loc.lon}&dirflg=w" aria-label="Cómo llegar andando al coche">IR</a>
   </div>` : ''}
-  ${best ? `<div class="pn pad col" style="gap:8px">
-    <div class="row"><span class="k">${fuel.type} más barata cerca</span>${fuel.avg && fuel.avg > best.price ? `<span class="m" style="font-size:12px;color:${C.ok}">−${nf((fuel.avg - best.price) * 100, 1)} cént.</span>` : ''}</div>
-    <div class="row"><div class="col" style="gap:2px;min-width:0"><span style="font-size:16px;font-weight:600">${esc(best.name)}</span><span class="muted">${esc(best.town)} · a ${nf(best.km, 1)} km</span></div>
-    <span class="col" style="gap:2px;align-items:flex-end"><span class="m" style="font-size:28px;font-weight:700;color:${C.ac}">${nf(best.price, 3)}<span style="font-size:12px;color:#7d858f"> €/L</span></span><span class="m" style="font-size:13px;color:#9aa2ab">${fuel.type === '95' ? '98' : '95'} ${best[fuel.type === '95' ? 'p98' : 'p95'] ? nf(best[fuel.type === '95' ? 'p98' : 'p95'], 3) : '—'} €/L</span></span></div>
-  </div>` : fuelErr ? `<div class="pn pad"><span class="k">Gasolineras</span><p class="muted" style="margin-top:6px">${esc(fuelErr)}</p></div>` : ''}
+  ${lastTrip ? `<button class="pn pad col" data-lasttrip="${lastTrip.id}" style="gap:4px;text-align:left;color:inherit;width:100%">
+    <div class="row" style="width:100%"><span class="k">Último trayecto · ${esc(dayLabel(lastTrip.start_ts))} ${hm(lastTrip.start_ts)}</span><span style="font-size:12px;color:${C.ac}">Ver ›</span></div>
+    <div class="row" style="width:100%"><span style="font-size:15px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${lastTrip.from || lastTrip.to ? esc(lastTrip.from || '…') + ' → ' + esc(lastTrip.to || '…') : hm(lastTrip.start_ts) + ' → ' + hm(lastTrip.end_ts)}</span>
+    <span class="m" style="font-size:14px;font-weight:700;white-space:nowrap">${nf(lastTrip.km, lastTrip.km < 10 ? 1 : 0)} km${lastTrip.fuel_used_l && lastTrip.km >= 5 ? ' · ' + nf(lastTrip.fuel_used_l / lastTrip.km * 100, 1) + ' l/100' : ''}</span></div>
+  </button>` : ''}
+  ${(() => {
+    const f = fuel && fuel.fav && !fuel.fav.missing && fuel.fav.price ? fuel.fav : null;
+    const a = advice && advice.ready ? advice : null;
+    const acol = a ? { llena: C.ok, espera: C.wa, normal: C.mu }[a.verdict] : C.mu;
+    const alab = a ? { llena: 'Buen día para llenar', espera: 'Mejor esperar', normal: 'Precio normal' }[a.verdict] : '';
+    const favBlock = f ? `<div class="row"><div class="col" style="gap:2px;min-width:0"><span class="k" style="color:${C.ac}">★ Tu gasolinera</span><span style="font-size:16px;font-weight:600">${esc(f.name)} ${esc(titleCaseJs(f.town))}</span>${a ? `<span style="font-size:12px;color:${acol};font-weight:600">${alab} · ${a.diff_cts > 0 ? '+' : ''}${nf(a.diff_cts, 1)} cts vs su media</span>` : ''}</div>
+      <span class="m" style="font-size:28px;font-weight:700;color:${C.ac}">${nf(f.price, 3)}<span style="font-size:12px;color:#7d858f"> €/L</span></span></div>` : '';
+    const bestBlock = best && (!f || best.id !== f.id) ? `<div class="row" style="${f ? 'padding-top:8px;border-top:1px solid #1b1e22' : ''}"><div class="col" style="gap:2px;min-width:0"><span class="k">${fuel.type} más barata cerca</span><span style="font-size:15px;font-weight:600">${esc(best.name)}</span><span class="muted">${esc(best.town)} · a ${nf(best.km, 1)} km</span></div>
+      <span class="m" style="font-size:${f ? 20 : 28}px;font-weight:700;color:${f ? C.tx : C.ac}">${nf(best.price, 3)}<span style="font-size:12px;color:#7d858f"> €/L</span></span></div>` : '';
+    return favBlock || bestBlock ? `<button class="pn pad col" data-go="datos" style="gap:8px;text-align:left;color:inherit;width:100%">${favBlock}${bestBlock}</button>`
+      : fuelErr ? `<div class="pn pad"><span class="k">Gasolineras</span><p class="muted" style="margin-top:6px">${esc(fuelErr)}</p></div>` : '';
+  })()}
   ${due.length ? `<button class="pn pad col" data-go="taller" style="gap:8px;text-align:left">
     <span class="k">Taller</span>
     ${due.map(i => `<span class="row" style="width:100%"><span style="font-weight:600">${esc(i.name)}</span><span class="tag" style="color:${i.status === 'vencido' ? C.bad : C.wa};border-color:${i.status === 'vencido' ? '#4a1d18' : '#4a3a12'}">${esc(i.summary)}</span></span>`).join('')}
@@ -545,6 +560,9 @@ function engineSections() {
     ${warmSvg(e.warm)}
     ${e.max_temp_trips.some(t => t.t >= 108) ? `<span style="font-size:12px;color:${C.bad}">⛔ Algún trayecto pasó de 108 °C.</span>` : `<span class="muted" style="font-size:12px">Temperatura máxima en estos trayectos: ${nf(Math.max(...e.max_temp_trips.map(t => t.t)))} °C (normal hasta ~105).</span>`}
   </div>
+  <div class="pn pad col" style="gap:10px"><div class="row"><span class="k">Batería · mínimo diario parado</span>${trendTag(battery)}</div>
+    ${batteryBars(battery && battery.days)}
+    <p class="muted">Por debajo de 12,2 V (línea roja) la batería sufre. Si baja día a día con el coche parado, revísala antes de que no arranque.</p></div>
   <div class="pn pad col" style="gap:6px">
     <div class="row"><span class="k">Alternador · tensión en marcha</span>${e.alt_avg != null ? `<span class="m" style="font-weight:700;color:${e.alt_avg >= 13.5 ? C.ok : C.wa}">${nf(e.alt_avg, 2)} V</span>` : ''}</div>
     ${e.alternator.length >= 2 ? lineChart(e.alternator, 'v', { min: 12.5, max: 15, fmt: v => nf(v, 1), color: C.blue, label: 'Tensión media en marcha por trayecto' }) : '<p class="muted">Hacen falta un par de trayectos más.</p>'}
@@ -573,24 +591,24 @@ function viewViajes() {
   const wk = trips.filter(t => t.start_ts >= Date.now() - 7 * 86400e3);
   const km = wk.reduce((s, t) => s + t.km, 0), secs = wk.reduce((s, t) => s + t.duration_s, 0), top = Math.max(0, ...wk.map(t => t.max_speed));
   const rec = (label, t, val, unit) => t ? `<button class="pn col" data-trip="${t.id}" style="padding:12px 14px;gap:4px;text-align:left"><span class="k">${label}</span><span class="m" style="font-size:24px;font-weight:700;color:${C.ac}">${val} <span style="font-size:12px;color:#7d858f;font-weight:500">${unit}</span></span><span style="font-size:11px;color:#7d858f">${esc(dayLabel(t.start_ts))} · #${pad2(t.id)}</span></button>` : '';
-  let html = `<div class="pn pad g3" style="gap:8px">
-    <div class="col" style="gap:4px"><span class="k">7 días</span><span class="m" style="font-size:24px;font-weight:700">${nf(km)} <span style="font-size:12px;color:#7d858f">km</span></span></div>
-    <div class="col" style="gap:4px"><span class="k">Al volante</span><span class="m" style="font-size:24px;font-weight:700">${clock(secs)}</span></div>
-    <div class="col" style="gap:4px"><span class="k">Coste</span><span class="m" style="font-size:24px;font-weight:700">${nf(wk.reduce((s, t) => s + (t.cost_eur || 0), 0), 0)} <span style="font-size:12px;color:#7d858f">€</span></span></div>
-  </div>`;
-  if (monthSum && monthSum.trips) {
-    const ms = monthSum, pv = ms.prev || {};
-    const d = (a, b, inv) => a == null || !b ? '' : (() => { const x = Math.round((a - b) / b * 100); const good = inv ? x < 0 : x > 0; return ` <span style="font-size:11px;color:${x === 0 ? C.mu : good ? C.ok : C.wa}">${x > 0 ? '+' : ''}${x} %</span>`; })();
-    html += `<div class="pn pad col" style="gap:10px">
-      <div class="row"><span class="k">Este mes · ${esc(ms.label.split(' ')[0])}</span><span style="font-size:12px;color:#7d858f">vs ${esc((pv.label || '').split(' ')[0])}</span></div>
-      <div class="g3" style="gap:8px">
-        <div class="col" style="gap:2px"><span class="k">Km</span><span class="m" style="font-size:20px;font-weight:700">${nf(ms.km)}${d(ms.km, pv.km)}</span></div>
-        <div class="col" style="gap:2px"><span class="k">Gasolina</span><span class="m" style="font-size:20px;font-weight:700">${nf(ms.fuel_eur, 0)} €${d(ms.fuel_eur, pv.fuel_eur, true)}</span></div>
-        <div class="col" style="gap:2px"><span class="k">Consumo</span><span class="m" style="font-size:20px;font-weight:700">${ms.l100 != null ? nf(ms.l100, 1) : '—'}${d(ms.l100, pv.l100, true)}</span></div>
+  // Resumen con selector Semana / Mes
+  const ms = monthSum, pv = (ms && ms.prev) || {};
+  const dd = (x, y, inv) => x == null || !y ? '' : (() => { const q = Math.round((x - y) / y * 100); const good = inv ? q < 0 : q > 0; return ` <span style="font-size:11px;color:${q === 0 ? C.mu : good ? C.ok : C.wa}">${q > 0 ? '+' : ''}${q} %</span>`; })();
+  const isMonth = viajesPeriod === 'mes' && ms;
+  let html = `<div class="pn pad col" style="gap:10px">
+    <div class="seg-pick" role="group" aria-label="Periodo"><button type="button" data-period="semana" class="${!isMonth ? 'on' : ''}">7 días</button><button type="button" data-period="mes" class="${isMonth ? 'on' : ''}">${ms ? esc(ms.label.split(' ')[0][0].toUpperCase() + ms.label.split(' ')[0].slice(1)) : 'Mes'}</button></div>
+    ${isMonth ? `<div class="g3" style="gap:8px">
+        <div class="col" style="gap:2px"><span class="k">Km</span><span class="m" style="font-size:22px;font-weight:700">${nf(ms.km)}${dd(ms.km, pv.km)}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Gasolina</span><span class="m" style="font-size:22px;font-weight:700">${nf(ms.fuel_eur, 0)} €${dd(ms.fuel_eur, pv.fuel_eur, true)}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Consumo</span><span class="m" style="font-size:22px;font-weight:700">${ms.l100 != null ? nf(ms.l100, 1) : '—'}${dd(ms.l100, pv.l100, true)}</span></div>
       </div>
-      <span class="muted" style="font-size:12px">${ms.trips} trayectos · ${nf(ms.hours, 1)} h al volante${ms.work ? ` · al trabajo ${ms.work.trips} viajes, ${nf(ms.work.eur, 2)} €` : ''}${ms.other_eur ? ` · otros gastos ${nf(ms.other_eur, 2)} €` : ''}. El día 1 te llega el resumen del mes.</span>
-    </div>`;
-  }
+      <span class="muted" style="font-size:12px">${ms.trips} trayectos · ${nf(ms.hours, 1)} h al volante${ms.work ? ` · al trabajo ${ms.work.trips} viajes, ${nf(ms.work.eur, 2)} €` : ''}${ms.other_eur ? ` · otros gastos ${nf(ms.other_eur, 2)} €` : ''}. Comparado con ${esc((pv.label || '').split(' ')[0])}. El día 1 te llega el resumen.</span>`
+    : `<div class="g3" style="gap:8px">
+        <div class="col" style="gap:2px"><span class="k">Km</span><span class="m" style="font-size:22px;font-weight:700">${nf(km)}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Al volante</span><span class="m" style="font-size:22px;font-weight:700">${clock(secs)}</span></div>
+        <div class="col" style="gap:2px"><span class="k">Coste</span><span class="m" style="font-size:22px;font-weight:700">${nf(wk.reduce((s, t) => s + (t.cost_eur || 0), 0), 0)} €</span></div>
+      </div><span class="muted" style="font-size:12px">${wk.length} trayectos en los últimos 7 días.</span>`}
+  </div>`;
   if (records && records.top_speed) html += `<div class="k" style="padding:6px 2px 0">Récords</div><div class="g2">
     ${rec('Velocidad punta', records.top_speed, nf(records.top_speed?.max_speed), 'km/h')}
     ${rec('Más eficiente', records.best_eff, nf(records.best_eff?.l100, 1), 'l/100')}
@@ -625,9 +643,19 @@ function viewViajes() {
       ${d.note ? `<p style="margin:0;font-size:14px;white-space:pre-wrap;color:#c9ced4">${esc(d.note)}</p>` : ''}
       <button class="btn sec" data-tracknote="${i}">${d.note ? 'Editar notas' : 'Añadir notas (presiones, reglajes…)'}</button>
     </div>`).join('');
+  // Lista: filtros y solo las 2 últimas semanas salvo que pidas más
+  const isWork = t => /portaventura|trabajo/i.test((t.from || '') + ' ' + (t.to || ''));
+  const kind = t => t.track ? 'circuito' : isWork(t) ? 'trabajo' : 'otros';
+  const counts = { todos: trips.length, trabajo: 0, circuito: 0, otros: 0 };
+  trips.forEach(t => counts[kind(t)]++);
+  const filtered = trips.filter(t => tripFilter === 'todos' || kind(t) === tripFilter);
+  const cut = Date.now() - 14 * 86400e3;
+  const shown = tripsAll ? filtered : filtered.filter((t, i) => t.start_ts >= cut || i < 5);
+  html += `<div class="row" style="gap:6px;padding:6px 0 0;flex-wrap:wrap;justify-content:flex-start">${[['todos', 'Todos'], ['trabajo', 'Trabajo'], ['circuito', 'Circuito'], ['otros', 'Otros']].filter(([k]) => k === 'todos' || counts[k])
+    .map(([k, l]) => `<button class="tag" data-tfilter="${k}" style="min-height:34px;padding:0 12px;font-size:12px;${tripFilter === k ? `color:#0a0b0d;background:${C.ac};border-color:${C.ac}` : 'color:#c9ced4;background:none'}">${l} · ${counts[k]}</button>`).join('')}</div>`;
   let day = null, group = '';
   const flush = () => { if (day) html += `<div class="pn" style="padding:4px 16px"><div class="k" style="padding:12px 0 4px">${esc(day)}</div>${group}</div>`; };
-  for (const t of trips) {
+  for (const t of shown) {
     const d = dayLabel(t.start_ts);
     if (d !== day) { flush(); day = d; group = ''; }
     group += `<button class="li" data-trip="${t.id}" style="grid-template-columns:34px 1fr 92px">
@@ -637,6 +665,8 @@ function viewViajes() {
     </button>`;
   }
   flush();
+  if (!shown.length) html += '<div class="pn pad"><p class="muted">No hay trayectos de este tipo.</p></div>';
+  if (shown.length < filtered.length) html += `<button class="btn sec" data-tmore>Ver más (${filtered.length - shown.length})</button>`;
   return html;
 }
 
@@ -671,7 +701,7 @@ function viewTrip(t) {
     <div class="m" style="position:absolute;left:10px;bottom:22px;z-index:500;display:flex;gap:10px;background:rgba(10,11,13,.85);border-radius:8px;padding:6px 10px;font-size:11px">
       ${t.max_speed == null || (t.path && t.path.sparse) ? `<span style="color:${C.ok}">● Salida</span><span style="color:#f4f5f6">● Llegada</span>${t.path ? `<span style="color:${C.ac}">┅ Ruta estimada</span>` : ''}` : `<span style="color:${C.ac}">● &lt;70</span><span style="color:${C.wa}">● 70–95</span><span style="color:${C.bad}">● &gt;95 km/h</span>`}</div></div>
   <div class="g2">${kv('Distancia', nf(t.km, 1), 'km')}${kv('Tiempo', clock(t.duration_s))}</div>
-  ${cmp}
+  ${t.same ? sameCard(t) : cmp}
   <div class="pn" style="padding:4px 16px">
     ${trow('Velocidad media', nf(t.avg_speed), 'km/h')}${trow('Velocidad punta', t.max_speed_low ? '—' : nf(t.max_speed), 'km/h', true)}
     ${trow('Régimen máximo', nf(t.max_rpm), 'rpm')}${st && st.cruise_rpm ? trow('Rpm a 110–125 km/h', nf(st.cruise_rpm), 'rpm') : ''}
@@ -683,7 +713,6 @@ function viewTrip(t) {
     ${trow('Coste del trayecto', t.cost_eur != null ? nf(t.cost_eur, 2) : '—', '€', true)}
   </div>
   ${t.price_l ? `<p class="muted" style="padding:0 4px">Coste calculado con ${nf(t.price_l, 3)} €/L (tu último repostaje con precio, o la media de gasolineras cercanas).</p>` : ''}
-  ${sameCard(t)}
   ${t.km < 15 && t.fuel_used_l ? `<p class="muted" style="padding:0 4px">En trayectos cortos el consumo es aproximado: el indicador de gasolina va a saltos de ~0,2 L. El dato fiable es el del depósito entero (en Datos).</p>` : ''}
   ${t.path && t.path.sparse && t.max_speed != null ? `<p class="muted" style="padding:0 4px">El coche mandó pocas lecturas en este trayecto (${t.points.length}), así que el mapa dibuja la ruta más probable por carretera y la velocidad punta no es fiable.</p>` : ''}
   ${t.max_speed == null ? `<p class="muted" style="padding:0 4px">El coche no mandó datos durante este trayecto, solo al arrancar y al apagar: ${t.path ? 'el mapa dibuja la ruta más probable por carretera' : 'el mapa une la salida y la llegada en línea recta'} y no hay velocidad ni rpm.</p>` : `<div class="pn pad col" style="gap:8px"><span class="k">Velocidad</span>${lineChart(pts, 's', { min: 0, max: Math.max(60, Math.ceil(t.max_speed / 20) * 20), fmt: v => nf(v), color: C.ac, dayTicks: false, label: 'Velocidad durante el trayecto' })}</div>
@@ -831,33 +860,32 @@ function viewDatos() {
       <span class="col" style="gap:2px;min-width:0"><span style="font-size:15px;font-weight:600">${esc(s.name)}</span><span style="font-size:12px;color:#7d858f">${esc(s.town)} · ${nf(s.km, 1)} km</span></span>
       <span class="col" style="gap:1px;align-items:flex-end"><span class="m" style="font-size:20px;font-weight:700;color:${i === 0 ? C.ac : C.tx}"><span style="font-size:11px;color:#7d858f;font-weight:500">${cfg.fuel} </span>${nf(s.price, 3)}</span><span class="m" style="font-size:13px;color:#9aa2ab">${other} ${s['p' + other] ? nf(s['p' + other], 3) : '—'}</span></span>
     </a>${star(s)}</div>`).join('');
+  const tk = refuels.tank;
+  const l100 = tk && tk.l100 != null ? tk.l100 : refuels.avg_l100; // un solo consumo: el del depósito (el que cuadra con el coche)
+  const eurKm2 = pL && l100 ? pL * l100 / 100 : null;
   return `
-  <div class="g2">
-    ${kv('Consumo medio', nf(refuels.avg_l100, 1), 'l/100')}
-    ${kv('Gasto ' + monthName, month.length ? nf(spend, 2) : '—', '€')}
-    ${kv('Coste por km', eurKm ? nf(eurKm * 100, 1) : '—', 'cént.')}
-    ${kv('7 días', nf(km7), 'km')}
+  <div class="pn" style="padding:4px 16px">
+    ${tk ? `<div class="col" style="gap:6px;padding:12px 0;border-bottom:1px solid #1d2126"><span class="k">Depósito actual · desde el ${new Date(tk.since).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</span>
+      <div class="g3" style="gap:8px"><span class="col"><span class="m" style="font-size:24px;font-weight:700">${tk.l100 != null ? nf(tk.l100, 1) : '—'}</span><span class="muted" style="font-size:11px">l/100 de media</span></span>
+      <span class="col"><span class="m" style="font-size:24px;font-weight:700">${nf(tk.km)}</span><span class="muted" style="font-size:11px">km · ${nf(tk.used_l, 1)} L</span></span>
+      <span class="col"><span class="m" style="font-size:24px;font-weight:700">≈${nf(tk.left_l, 0)} L</span><span class="muted" style="font-size:11px">${tk.range_km != null ? '≈' + nf(tk.range_km) + ' km a este ritmo' : 'quedan'}</span></span></div></div>` : ''}
+    <div class="g3" style="gap:8px;padding:12px 0;border-bottom:1px solid #1d2126">
+      <span class="col"><span class="k">Gasto ${esc(monthName)}</span><span class="m" style="font-size:18px;font-weight:700">${month.length ? nf(spend, 2) + ' €' : '—'}</span></span>
+      <span class="col"><span class="k">Coste/km</span><span class="m" style="font-size:18px;font-weight:700">${eurKm2 ? nf(eurKm2 * 100, 1) + ' cts' : '—'}</span></span>
+      <span class="col"><span class="k">7 días</span><span class="m" style="font-size:18px;font-weight:700">${nf(km7)} km</span></span>
+    </div>
+    <div class="col" style="gap:6px;padding:12px 0;border-bottom:1px solid #1d2126"><div class="row"><span class="k">Nivel · 7 días</span><span class="m" style="font-size:13px;color:${C.ac}">${pts.length ? nf(pts[pts.length - 1].fuel_pct) + ' %' : ''}</span></div>
+      ${lineChart(pts, 'fuel_pct', { min: 0, max: 100, fmt: v => nf(v), color: C.ac, label: 'Nivel del depósito' })}</div>
+    <div class="row" style="padding:12px 0"><span class="k">Repostajes</span><button class="m" id="copyCsv" style="background:none;border:0;color:${C.ac};font-size:12px;font-weight:600;letter-spacing:.08em;min-height:36px">COPIAR CSV</button></div>
+    <label class="btn sec" for="pumpFile" data-pump="" style="margin-bottom:8px;width:100%">📸 Foto del surtidor</label>
+    ${rows}
   </div>
-  <div class="pn pad col" style="gap:10px"><div class="row"><span class="k">Depósito · 7 días</span><span class="m" style="font-size:13px;color:${C.ac}">${pts.length ? nf(pts[pts.length - 1].fuel_pct) + ' %' : ''}</span></div>
-    ${lineChart(pts, 'fuel_pct', { min: 0, max: 100, fmt: v => nf(v), color: C.ac, label: 'Nivel del depósito' })}</div>
-  <div class="pn pad col" style="gap:10px"><div class="row"><span class="k">Batería · mínimo diario</span>${trendTag(battery)}</div>
-    ${batteryBars(battery && battery.days)}
-    <p class="muted">Por debajo de 12,2 V (línea roja) la batería sufre. Si baja día a día con el coche parado, revísala antes de que no arranque.</p></div>
   ${favCard}
   <div class="pn" style="padding:4px 16px">
     <div class="row" style="padding:12px 0"><span class="k">Gasolina ${cfg.fuel} cerca del coche</span>${fuel && fuel.date ? `<span style="font-size:11px;color:#7d858f">Ministerio · ${esc(String(fuel.date).slice(0, 16))}</span>` : ''}</div>
     ${stations || `<p class="muted" style="padding:0 0 12px">${esc(fuelErr || 'Cargando precios…')}</p>`}
   </div>
-  ${expensesCard()}
-  <div class="pn" style="padding:4px 16px">
-    ${refuels.tank ? `<div class="col" style="gap:6px;padding:12px 0;border-bottom:1px solid #1d2126"><span class="k">Depósito actual · desde el ${new Date(refuels.tank.since).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</span>
-      <div class="g3" style="gap:8px"><span class="col"><span class="m" style="font-size:22px;font-weight:700">${refuels.tank.l100 != null ? nf(refuels.tank.l100, 1) : '—'}</span><span class="muted" style="font-size:11px">l/100 de media</span></span>
-      <span class="col"><span class="m" style="font-size:22px;font-weight:700">${nf(refuels.tank.km)}</span><span class="muted" style="font-size:11px">km · ${nf(refuels.tank.used_l, 1)} L</span></span>
-      <span class="col"><span class="m" style="font-size:22px;font-weight:700">≈${nf(refuels.tank.left_l, 0)} L</span><span class="muted" style="font-size:11px">${refuels.tank.range_km != null ? '≈' + nf(refuels.tank.range_km) + ' km a este ritmo' : 'quedan'}</span></span></div></div>` : ''}
-    <div class="row" style="padding:12px 0"><span class="k">Repostajes</span><button class="m" id="copyCsv" style="background:none;border:0;color:${C.ac};font-size:12px;font-weight:600;letter-spacing:.08em;min-height:36px">COPIAR CSV</button></div>
-    <label class="btn sec" for="pumpFile" data-pump="" style="margin-bottom:8px;width:100%">📸 Foto del surtidor</label>
-    ${rows}
-  </div>`;
+  ${expensesCard()}`;
 }
 
 function expensesCard() {
@@ -882,7 +910,8 @@ function viewTaller() {
   if (!maint) return '<div class="pn pad"><p class="muted">Cargando mantenimiento…</p></div>';
   const col = { vencido: C.bad, pronto: C.wa, ok: C.ok, 'sin datos': C.mu };
   const lab = { vencido: 'Vencido', pronto: 'Pronto', ok: 'Al día', 'sin datos': 'Sin configurar' };
-  const items = maint.items.map(i => {
+  const unset = maint.items.filter(i => i.status === 'sin datos' && !i.oil_life);
+  const items = maint.items.filter(i => !unset.includes(i)).map(i => {
     const segs = Array.from({ length: 12 }, (_, k) => `<div style="height:10px;border-radius:2px;background:${i.status !== 'sin datos' && (k + 1) / 12 <= i.pct + 1e-9 ? col[i.status] : '#1d2126'}"></div>`).join('');
     const last = [i.last_km != null ? 'Último: ' + nf(i.last_km) + ' km' : '', i.last_date ? new Date(i.last_date).toLocaleDateString('es-ES') : '',
       i.interval_km ? 'cada ' + nf(i.interval_km) + ' km' : '', i.interval_months ? 'cada ' + i.interval_months + ' meses' : ''].filter(Boolean).join(' · ');
@@ -898,11 +927,19 @@ function viewTaller() {
     <div style="display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:3px">${Array.from({ length: 12 }, (_, k) => `<div style="height:10px;border-radius:2px;background:${(k + 1) / 12 <= live.oil_life_pct / 100 + 1e-9 ? (live.oil_life_pct < 15 ? C.bad : live.oil_life_pct < 30 ? C.wa : C.ok) : '#1d2126'}"></div>`).join('')}</div>
     <span style="font-size:12px;color:#7d858f">El coche lo calcula según tu forma de conducir. Cuando llegue a 0 % toca cambiarlo.${maint.oil_km_per_pct ? ` Baja un 1 % cada ${nf(maint.oil_km_per_pct)} km.` : ' La fecha estimada sale cuando baje un par de puntos más.'}</span></div>` : ''}
   <div class="pn pad row"><div class="col" style="gap:4px"><span class="k">Odómetro</span><span class="m" style="font-size:26px;font-weight:700">${nf(maint.odometer)} km</span>${maint.km_per_day ? `<span style="font-size:12px;color:#7d858f">≈ ${nf(maint.km_per_day)} km al día</span>` : ''}</div>
-    <span style="font-size:12px;color:#7d858f;max-width:170px;text-align:right">Intervalos de ejemplo: ajústalos. Aviso a las 9:00 si faltan 1.000 km o 30 días.</span></div>
+    <span style="font-size:12px;color:#7d858f;max-width:170px;text-align:right">${unset.length ? 'Intervalos de ejemplo: ajústalos. ' : ''}Aviso a las 9:00 si faltan 1.000 km o 30 días.</span></div>
   ${wheelsCard()}
   ${tyreCard()}
   ${deadlineCard()}
   ${items}
+  ${unset.length ? `<div class="pn" style="padding:4px 16px">
+    <div class="k" style="padding:12px 0 4px">${unset.length} sin configurar · toca para poner cuándo se hizo</div>
+    ${unset.map(i => `<div class="li" style="grid-template-columns:1fr auto auto;gap:8px">
+      <button data-edit="${i.id}" class="col" style="gap:2px;background:none;border:0;padding:0;text-align:left;color:inherit"><span style="font-size:15px;font-weight:600">${esc(i.name)}</span><span style="font-size:12px;color:#7d858f">${[i.interval_km ? 'cada ' + nf(i.interval_km) + ' km' : '', i.interval_months ? 'cada ' + i.interval_months + ' meses' : ''].filter(Boolean).join(' · ')}</span></button>
+      <button class="btn sec" data-done="${i.id}" style="min-height:36px;padding:0 10px;font-size:11px">Hecho hoy</button>
+      <button class="btn sec" data-edit="${i.id}" style="min-height:36px;padding:0 10px;font-size:11px">Poner</button>
+    </div>`).join('')}
+  </div>` : ''}
   <button class="btn ghost" data-edit="new" style="min-height:52px">+ Añadir tarea</button>`;
 }
 
@@ -1052,13 +1089,16 @@ function deadlineCard() {
 
 function viewAjustes() {
   const pushOn = typeof Notification !== 'undefined' && Notification.permission === 'granted';
-  return `
+  const serverForm = `
   <form class="pn pad col" id="cfgForm" style="gap:12px">
     <span class="k">Conexión con tu servidor</span>
     <label for="fUrl">URL del Worker<input id="fUrl" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://fiesta-st-api.tu-usuario.workers.dev" value="${esc(cfg.url || '')}" required></label>
     <label for="fKey">Contraseña (APP_KEY)<input id="fKey" type="password" autocomplete="current-password" value="${esc(cfg.key || '')}" required></label>
     <button class="btn" type="submit">Guardar y conectar</button>
   </form>
+  <p class="muted">La conexión se guarda solo en este móvil.</p>`;
+  return `
+  ${cfg.url ? '' : serverForm}
   <div class="pn pad col" style="gap:10px">
     <span class="k">Gasolina que usas</span>
     <div class="seg-pick" role="group" aria-label="Tipo de gasolina">
@@ -1075,19 +1115,21 @@ function viewAjustes() {
       : '<p class="muted">Para recibir avisos en el iPhone, abre la app desde su icono: en Safari, toca Compartir y luego "Añadir a pantalla de inicio".</p>'}
   </div>
   <div class="pn pad col" style="gap:10px">
-    <span class="k">Widget en la pantalla de inicio</span>
-    <p class="muted">1. Instala la app gratuita <b>Scriptable</b> de la App Store.<br>2. Copia el código, abre Scriptable, toca + y pégalo.<br>3. Ejecútalo una vez: te pide la URL y la contraseña.<br>4. Mantén pulsado el escritorio → + → Scriptable → elige el script.</p>
+    <span class="k">Widget (inicio y pantalla de bloqueo)</span>
     <div class="btns"><button class="btn sec" id="copyWidget">Copiar código</button><a class="btn sec" href="https://apps.apple.com/app/scriptable/id1405459188">Scriptable</a></div>
-    <p class="muted">Pantalla de bloqueo: mantén pulsada la pantalla bloqueada → Personalizar → Pantalla de bloqueo → toca la zona de widgets → Scriptable (el rectangular o el redondo) → elige el mismo script.</p>
+    <details><summary class="muted" style="cursor:pointer">Cómo se instala ›</summary>
+    <p class="muted">1. Instala la app gratuita <b>Scriptable</b> de la App Store.<br>2. Copia el código, abre Scriptable, toca + y pégalo.<br>3. Ejecútalo una vez: te pide la URL y la contraseña.<br>4. Mantén pulsado el escritorio → + → Scriptable → elige el script.</p>
+    <p class="muted">Pantalla de bloqueo: mantén pulsada la pantalla bloqueada → Personalizar → Pantalla de bloqueo → toca la zona de widgets → Scriptable (el rectangular o el redondo) → elige el mismo script.</p></details>
   </div>
   <div class="pn pad col" style="gap:10px">
     <span class="k">Siri: "¿Cómo está el coche?"</span>
+    <div class="btns"><button class="btn sec" id="copySiri">Copiar dirección</button><button class="btn sec" id="testSiri">Probar</button></div>
+    <p id="siriOut" class="muted" style="color:var(--tx)"></p>
+    <details><summary class="muted" style="cursor:pointer">Cómo se crea el atajo ›</summary>
     <p class="muted">1. Toca <b>Copiar dirección</b> (ya lleva tu contraseña dentro, no hace falta poner cabeceras).<br>
     2. En <b>Atajos</b>: + → busca <b>Obtener contenido de URL</b> → toca "URL" y pega.<br>
     3. Añade <b>Leer texto</b> debajo.<br>
-    4. Ponle de nombre <b>Cómo está el coche</b>. Di "Oye Siri, cómo está el coche".</p>
-    <div class="btns"><button class="btn sec" id="copySiri">Copiar dirección</button><button class="btn sec" id="testSiri">Probar</button></div>
-    <p id="siriOut" class="muted" style="color:var(--tx)"></p>
+    4. Ponle de nombre <b>Cómo está el coche</b>. Di "Oye Siri, cómo está el coche".</p></details>
   </div>
   <div class="pn pad col" style="gap:12px">
     <span class="k">Presiones de diario (bar)</span>
@@ -1118,8 +1160,8 @@ function viewAjustes() {
     ${backups && backups.backups.length ? backups.backups.slice(0, 4).map(b => `<button class="li" data-backup="${esc(b.name)}" style="grid-template-columns:1fr auto"><span style="font-size:14px">${new Date(b.name.slice(6)).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</span><span class="m" style="font-size:13px;color:#7d858f">${b.bytes ? nf(b.bytes / 1024) + ' KB' : ''} ↓</span></button>`).join('') : '<p class="muted" style="margin:0">La primera copia automática se hará este domingo.</p>'}
     <button class="btn sec" id="backupBtn">Descargar copia ahora</button>
   </div>
-  <button class="btn sec" id="cancelCfg">Volver</button>` : ''}
-  <p class="muted">La conexión se guarda solo en este móvil.</p>`;
+  ${serverForm}
+  <button class="btn sec" id="cancelCfg">Volver</button>` : ''}`;
 }
 
 function sheetHtml() {
@@ -1167,6 +1209,14 @@ function sheetHtml() {
       <button type="button" class="btn sec" id="pPlace">📍 Guardar este sitio como lugar (Casa, Trabajo…)</button>
       ${places.length ? `<p class="muted">Lugares: ${places.map(p => esc(p.name)).join(' · ')}</p>` : ''}
       <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Guardar nota</button></div>
+    </form>`;
+  }
+  if (sheet.type === 'donecost') {
+    return `<form class="sheet" id="sheetForm">
+      <span class="k">${esc(sheet.name)} · apuntado con los km de hoy</span>
+      <label for="dcEur">¿Cuánto te ha costado? (€)<input id="dcEur" inputmode="decimal" placeholder="Déjalo vacío si no ha costado nada"></label>
+      <p class="muted">Se suma a Gastos del coche (categoría Taller).</p>
+      <div class="btns"><button class="btn sec" type="button" data-close>Sin gasto</button><button class="btn" type="submit">Guardar gasto</button></div>
     </form>`;
   }
   if (sheet.type === 'tread') {
@@ -1352,7 +1402,11 @@ function afterRender() {
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => { sheet = { type: 'maint', item: b.dataset.edit === 'new' ? null : maint.items.find(i => String(i.id) === b.dataset.edit) }; render(); });
   document.querySelectorAll('[data-done]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    try { maint = await api(`/api/maintenance/${b.dataset.done}/done`, { method: 'POST' }); loaded.maint = Date.now(); flash('Apuntado con los km de hoy'); }
+    try {
+      const it = maint.items.find(x => String(x.id) === b.dataset.done);
+      maint = await api(`/api/maintenance/${b.dataset.done}/done`, { method: 'POST' }); loaded.maint = Date.now();
+      sheet = { type: 'donecost', name: it ? it.name : 'Mantenimiento' }; render();
+    }
     catch (e) { error = e.message; render(); }
   });
   document.querySelectorAll('[data-fuel]').forEach(b => b.onclick = () => { cfg.fuel = b.dataset.fuel; saveCfg(); fuel = null; loaded.fuel = 0; render(); });
@@ -1377,6 +1431,13 @@ function afterRender() {
   });
   document.querySelectorAll('[data-tyreset]').forEach(b => b.onclick = () => { sheet = { type: 'tyreset' }; render(); });
   document.querySelectorAll('[data-tread]').forEach(b => b.onclick = () => { sheet = { type: 'tread' }; render(); });
+  document.querySelectorAll('[data-period]').forEach(b => b.onclick = () => { viajesPeriod = b.dataset.period; haptic(); render(); });
+  document.querySelectorAll('[data-tfilter]').forEach(b => b.onclick = () => { tripFilter = b.dataset.tfilter; tripsAll = false; haptic(); render(); });
+  document.querySelectorAll('[data-tmore]').forEach(b => b.onclick = () => { tripsAll = true; render(); });
+  document.querySelectorAll('[data-lasttrip]').forEach(b => b.onclick = async () => {
+    try { const d = await api('/api/trips/' + b.dataset.lasttrip); go('viajes'); tripDetail = d; error = null; } catch (e) { error = e.message; }
+    render(); const mn = document.querySelector('main'); if (mn) mn.scrollTop = 0;
+  });
   document.querySelectorAll('[data-goruedas]').forEach(b => b.onclick = () => { location.hash = '#taller'; setTimeout(() => { const el = document.getElementById('ruedas'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 400); });
   document.querySelectorAll('[data-tyrerot]').forEach(b => b.onclick = async () => {
     try { tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ rotated: true }) }); flash('Rotación apuntada'); render(); } catch (e) { error = e.message; render(); }
@@ -1540,7 +1601,11 @@ function bindSheet() {
     e.preventDefault();
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
-      if (sheet.type === 'tread') {
+      if (sheet.type === 'donecost') {
+        const eur = $('#dcEur').value.trim();
+        if (eur) { expenses = await api('/api/expenses', { method: 'POST', body: JSON.stringify({ cat: 'Taller', desc: sheet.name, eur, date: new Date().toISOString().slice(0, 10) }) }); loaded.expenses = 0; flash('Gasto apuntado'); }
+        sheet = null;
+      } else if (sheet.type === 'tread') {
         const tread = {};
         for (const k of ['fl', 'fr', 'rl', 'rr']) tread[k] = { o: $('#tr_' + k + '_o').value, c: $('#tr_' + k + '_c').value, i: $('#tr_' + k + '_i').value };
         tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ tread, new_mm: $('#trNew').value }) });

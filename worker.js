@@ -2232,7 +2232,8 @@ async function fuelStationsNear(env, lat, lon) {
   const res = await Promise.allSettled(provs.map(p => fuelStations(env, p)));
   const ok = res.filter(r => r.status === 'fulfilled').map(r => r.value);
   if (!ok.length) throw res[0].reason;
-  return { date: ok[0].date, list: ok.flatMap(r => r.list) };
+  const seen = new Set();
+  return { date: ok[0].date, list: ok.flatMap(r => r.list).filter(s => !seen.has(s.id) && seen.add(s.id)) };
 }
 
 async function fuelStations(env, prov) {
