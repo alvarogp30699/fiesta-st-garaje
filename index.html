@@ -987,16 +987,21 @@ function wheelNotes(c, ts) {
   const lastTrip = trips && trips[0] ? trips[0].end_ts : 0;
   const hot = running || (Date.now() - lastTrip < 45 * 60e3);
   const P = (k, v) => `${WHEEL[k]} ${nf(v, 2)} bar`;
+  // En caliente se comparan las presiones en frío de hoy (las del arranque, con el motor frío)
+  const cold = ts && ts.cold && ts.cold.ts && Date.now() - ts.cold.ts < 20 * 3600e3 ? ts.cold : null;
+  const useCold = hot && cold;
   if (Object.keys(t).length) {
-    if (hot) out.push(['i', 'Presiones en caliente: al rodar suben 0,2-0,3 bar. Para compararlas con las tuyas, míralas en frío (por la mañana o tras 2-3 h parado).']);
+    if (useCold) out.push(['i', `En caliente suben 0,2-0,3 bar, así que comparo con las de hoy en frío (${hm(cold.ts)}): ${['fl', 'fr', 'rl', 'rr'].map(k => nf(cold[k], 2)).join(' · ')} bar.`]);
+    else if (hot) out.push(['i', 'Presiones en caliente: al rodar suben 0,2-0,3 bar. Para compararlas con las tuyas, míralas en frío (por la mañana o tras 2-3 h parado).']);
     for (const k of ['fl', 'fr', 'rl', 'rr']) {
-      const v = t[k], r = ref[k]; if (v == null || r == null) continue;
+      const v = useCold ? cold[k] : t[k], r = ref[k]; if (v == null || r == null) continue;
       const d = v - r;
-      if (!hot && d <= -0.12) out.push(['w', `${P(k, v)}: baja (${nf(d, 2)}). Ponla a ${nf(r, 2)}: con poca presión se gastan los dos hombros y se calienta más.`]);
-      if (!hot && d >= 0.15) out.push(['b', `${P(k, v)}: algo inflada (+${nf(d, 2)}). Con mucha presión se gasta más el centro y agarra menos.`]);
+      if ((!hot || useCold) && d <= -0.12) out.push(['w', `${P(k, v)}: baja (${nf(d, 2)}). Ponla a ${nf(r, 2)}: con poca presión se gastan los dos hombros y se calienta más.`]);
+      if ((!hot || useCold) && d >= 0.15) out.push(['b', `${P(k, v)}: algo inflada (+${nf(d, 2)}). Con mucha presión se gasta más el centro y agarra menos.`]);
     }
     for (const [a, b, n] of [['fl', 'fr', 'delanteras'], ['rl', 'rr', 'traseras']]) {
-      if (t[a] != null && t[b] != null && Math.abs(t[a] - t[b]) >= 0.1) out.push(['w', `Las ${n} van distintas (${nf(t[a], 2)} y ${nf(t[b], 2)}): iguálalas, si no el coche tira hacia un lado al frenar.`]);
+      const P2 = useCold ? cold : t;
+      if (P2[a] != null && P2[b] != null && Math.abs(P2[a] - P2[b]) >= (hot && !useCold ? 0.15 : 0.1)) out.push(['w', `Las ${n} van distintas${useCold ? ' en frío' : ''} (${nf(P2[a], 2)} y ${nf(P2[b], 2)}): iguálalas, si no el coche tira hacia un lado al frenar.`]);
     }
   }
   const L = ts && ts.tread_last;

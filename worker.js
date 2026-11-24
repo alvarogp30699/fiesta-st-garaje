@@ -371,7 +371,7 @@ function mapTelemetry(data) {
     fuel_pct: num(val('fuelLevel')) != null ? r1(Math.min(100, num(val('fuelLevel')))) : null,
     range_km: num(val('fuelRange')) != null ? Math.round(num(val('fuelRange'))) : null,
     // Con el motor apagado, más de 13,2 V es la tensión de carga que quedó al apagar, no la de reposo: no vale
-    battery_v: (() => { const v = num(val('batteryVoltage')); if (v == null) return null; const off = /OFF/i.test(String(val('ignitionStatus') || '')); return off && v > 13.2 ? null : Math.round(v * 100) / 100; })(),
+    battery_v: (() => { const v = num(val('batteryVoltage')); if (v == null) return null; const off = /OFF/i.test(String(val('ignitionStatus') || '')); return off && v > 12.9 ? null : Math.round(v * 100) / 100; })(),
     tyres,
     tyre_ref,
     tyres_low,
@@ -571,6 +571,7 @@ function processCar(db, st, c, opts = {}) {
       if (opts.guard && guardActive(opts.guard, c.ts)) {
         notes.push({ title: '⚠️ El coche se ha encendido', body: `Tu Fiesta ST se ha puesto en marcha a las ${hhmm(c.ts)}. Si no eres tú, revisa dónde está.`, url: '#estado', tag: 'guard', urgent: true });
       }
+      if (c.tyres && !c.track && (c.coolant_c ?? c.oil_c ?? 99) < 45) st.coldTyres = { ts: c.data_ts || c.ts, ...c.tyres };
       st.trip = {
         start_ts: c.data_ts && c.data_ts < c.ts ? c.data_ts : c.ts, start_odo: c.odometer_km, start_fuel: c.fuel_pct, start_oil: c.oil_c ?? c.coolant_c,
         start: c.location ? [c.location.lat, c.location.lon] : null, track: !!c.track,
@@ -728,6 +729,15 @@ async function ingest(env, car, st) {
       } catch (e) { /* sin precio */ }
       notes.push({ title: '⛽ Toca repostar', body, url: '#datos', tag: 'fuel_low' });
     }
+  }
+  if (st.coldTyres) {
+    const ct = st.coldTyres; delete st.coldTyres;
+    const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'cold_tyres'").first();
+    const day = new Date(ct.ts + 3600e3).toISOString().slice(0, 10);
+    const hist = (row ? JSON.parse(row.v) : []).filter(h => h.d !== day);
+    hist.push({ d: day, ts: ct.ts, fl: ct.fl, fr: ct.fr, rl: ct.rl, rr: ct.rr, src: 'arranque' });
+    while (hist.length > 30) hist.shift();
+    stmts.push(env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('cold_tyres', ?)").bind(JSON.stringify(hist)));
   }
   stmts.push(stateStmt(env.DB, st));
   await env.DB.batch(stmts);
@@ -1178,7 +1188,9 @@ async function refuelAdvice(env) {
   const diff = round((today - mean) * 100, 1); // céntimos sobre la media
   const todayIdx = new Date(Date.now() + 3600e3).getUTCDay();
   let verdict, short;
-  if (today <= min + 0.002 || diff <= -1) { verdict = 'llena'; short = `Hoy está ${fmt(-diff, 1)} céntimos por debajo de su media: buen día para llenar.`; }
+  const min90 = Math.min(...hist.map(h => h[key]));
+  const tr30 = round((today - last30[0]) * 100, 0);
+  if (today <= min + 0.002 || diff <= -1) { verdict = 'llena'; short = `Hoy está ${fmt(-diff, 1)} céntimos por debajo de su media${today <= min90 + 0.001 ? ', el precio más bajo de los últimos 3 meses' : ''}: buen día para llenar.${tr30 <= -5 ? ` Lleva semanas bajando (${fmt(tr30, 0)} cts en un mes), pero esperar es apostar.` : ''}`; }
   else if (diff >= 1.5) { verdict = 'espera'; short = `Hoy está ${fmt(diff, 1)} céntimos por encima de su media${pattern ? `; suele estar más barata los ${pattern.best}` : ''}. Si puedes, pon lo justo y llena luego.`; }
   else { verdict = 'normal'; short = pattern && pattern.best !== DIAS[todayIdx] ? `Precio normal hoy; los ${pattern.best} suele estar ${fmt(pattern.best_cts, 1)} céntimos más barata.` : 'Precio normal hoy.'; }
   const pts = hist.length;
@@ -1591,8 +1603,10 @@ async function slowPuncture(env, day) {
   // Solo cuenta como "en frío" si lleva al menos 3 h parado
   if (!st.parked || Date.now() - st.parked.ts < 3 * 3600e3) return;
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'cold_tyres'").first();
-  const hist = (row ? JSON.parse(row.v) : []).filter(h => h.d !== day);
-  hist.push({ d: day, ...c.tyres });
+  const prevHist = row ? JSON.parse(row.v) : [];
+  if (prevHist.some(h => h.d === day && h.src === 'arranque')) return;
+  const hist = prevHist.filter(h => h.d !== day);
+  hist.push({ d: day, ts: Date.now(), ...c.tyres });
   while (hist.length > 30) hist.shift();
   await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('cold_tyres', ?)").bind(JSON.stringify(hist)).run();
   if (hist.length < 4) return;
@@ -1881,6 +1895,8 @@ async function getTyreSet(env) {
   const t = row ? JSON.parse(row.v) : { model: null, size: null, mounted_date: null, mounted_km: null, rotated_km: null };
   const odo = await currentOdo(env);
   const out = { ...t, odometer: odo, km: null, track_km: 0, track_days: 0, rotate_in_km: null };
+  const ctr = await env.DB.prepare("SELECT v FROM kv WHERE k = 'cold_tyres'").first();
+  if (ctr) { const h = JSON.parse(ctr.v); out.cold = h[h.length - 1] || null; }
   if (t.mounted_km != null && odo != null) out.km = Math.max(0, Math.round(odo - t.mounted_km));
   if (t.mounted_date) Object.assign(out, (({ km, days }) => ({ track_km: round(km, 1), track_days: days }))(await trackSince(env, t.mounted_date)));
   const base = t.rotated_km ?? t.mounted_km;
