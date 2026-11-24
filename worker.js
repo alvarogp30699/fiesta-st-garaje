@@ -109,6 +109,7 @@ export default {
       if (m === 'DELETE' && p.startsWith('/api/deadlines/')) return json(await deleteDeadline(env, decodeURIComponent(p.slice(15))));
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
       if (m === 'GET' && p === '/api/fuel/advice') return json(await refuelAdvice(env));
+      if (m === 'GET' && p === '/api/engine') return json(await engineStats(env, clampInt(url.searchParams.get('days'), 7, 365, 30)));
       if (m === 'GET' && p === '/api/month') return json(await monthSummary(env, url.searchParams.get('m')));
       if (m === 'GET' && p === '/api/backups') return json(await listBackups(env));
       if (m === 'GET' && p.startsWith('/api/backups/')) return json(await getBackup(env, decodeURIComponent(p.slice(13))));
@@ -1239,6 +1240,88 @@ async function sameTrips(env, t, pts) {
   return { n: same.length, avg_s: Math.round(avgS), diff_s: Math.round(t.duration_s - avgS), best_s: best.duration_s, best_id: best.id, best_ts: best.start_ts,
     is_best: best.id === t.id, rank, of: all.length, avg_l100: avgL != null ? round(avgL, 1) : null,
     l100: t.fuel_used_l && t.km >= 5 ? round(t.fuel_used_l / t.km * 100, 1) : null };
+}
+
+// ---------- Salud y uso del motor ----------
+async function engineStats(env, days) {
+  const since = Date.now() - days * 86400e3;
+  const { results: trips } = await env.DB.prepare('SELECT id, start_ts, end_ts, km, duration_s, max_rpm, max_oil, track FROM trips WHERE start_ts >= ? ORDER BY start_ts').bind(since).all();
+  const { results: snaps } = await env.DB.prepare("SELECT data FROM snapshots WHERE ts >= ? AND json_extract(data, '$.ignition') != 'off' ORDER BY ts").bind(since - 3600e3).all();
+  const seen = new Set(), S = [];
+  for (const r of snaps) {
+    let c; try { c = JSON.parse(r.data); } catch (e) { continue; }
+    const k = c.data_ts || c.ts; if (seen.has(k)) continue; seen.add(k);
+    const trip = trips.find(t => k >= t.start_ts - 60e3 && k <= t.end_ts + 60e3);
+    if (!trip) continue;
+    S.push({ ts: k, trip, spd: c.speed_kmh || 0, rpm: c.rpm || 0, temp: c.oil_c ?? c.coolant_c ?? null, bat: c.battery_v, gear: gearFrom(c.speed_kmh, c.rpm) });
+  }
+  const live = S.filter(p => p.rpm > 0);
+  // Tiempo en cada franja de vueltas (cada lectura vale lo mismo: llegan cada ~2 min)
+  const BANDS = [[0, 1100, 'Ralentí'], [1100, 2000, '1.100–2.000'], [2000, 2500, '2.000–2.500'], [2500, 3000, '2.500–3.000'], [3000, 4000, '3.000–4.000'], [4000, 5000, '4.000–5.000'], [5000, 9000, '+5.000']];
+  const rpmBands = BANDS.map(([a, b, l]) => ({ label: l, n: live.filter(p => p.rpm >= a && p.rpm < b).length }));
+  const gears = [1, 2, 3, 4, 5, 6].map(g => ({ gear: g, n: live.filter(p => p.gear === g).length }));
+  const scatter = live.filter(p => p.spd > 0).slice(-500).map(p => [p.spd, p.rpm, p.gear || 0]);
+  // Por trayecto: calentamiento, temperatura máxima, alternador, revoluciones en frío
+  const per = trips.map(t => {
+    const ps = S.filter(p => p.trip === t);
+    const w = ps.find(p => p.temp != null && p.temp >= OIL_WARM);
+    const temps = ps.map(p => p.temp).filter(v => v != null);
+    const alt = ps.filter(p => p.rpm > 1500 && p.bat).map(p => p.bat);
+    const cold = ps.filter(p => p.temp != null && p.temp < 70 && p.rpm > 3000);
+    return { id: t.id, ts: t.start_ts, km: t.km, track: !!t.track, n: ps.length,
+      warm_min: w ? Math.max(0, Math.round((w.ts - t.start_ts) / 60e3)) : null,
+      reached: temps.length ? Math.max(...temps, t.max_oil || 0) >= OIL_WARM : (t.max_oil || 0) >= OIL_WARM,
+      cold_start: temps.length ? temps[0] < 40 : null, max_temp: Math.max(t.max_oil || 0, ...temps, 0) || null,
+      alt_v: alt.length ? r2(alt.reduce((a, b) => a + b, 0) / alt.length) : null, cold_revs: cold.length ? Math.max(...cold.map(p => p.rpm)) : null };
+  });
+  const road = per.filter(p => !p.track);
+  const short = road.filter(p => !p.reached);
+  const coldRev = road.filter(p => p.cold_revs);
+  const hot = per.filter(p => p.max_temp != null && p.max_temp >= 108);
+  const altS = per.filter(p => p.alt_v != null);
+  const altAvg = altS.length ? r2(altS.reduce((a, p) => a + p.alt_v, 0) / altS.length) : null;
+  const altLow = altAvg != null && altAvg < 13.5;
+  // Nota de cuidado del motor
+  let score = 100; const tips = [];
+  if (road.length) {
+    const sp = short.length / road.length, cp = coldRev.length / road.length;
+    if (sp > 0.25) { score -= Math.min(25, Math.round((sp - 0.25) * 60)); tips.push({ k: 'w', t: `${Math.round(sp * 100)} % de trayectos sin llegar a temperatura: el aceite no se calienta del todo y acumula humedad y gasolina. Haz al menos un trayecto de 20 min seguidos a la semana.` }); }
+    else tips.push({ k: 'ok', t: `Casi todos tus trayectos llegan a temperatura (${Math.round((1 - sp) * 100)} %).` });
+    if (coldRev.length) { score -= Math.min(30, Math.round(cp * 80) + 5); tips.push({ k: 'w', t: `${coldRev.length} trayecto${coldRev.length > 1 ? 's' : ''} con más de 3.000 rpm en frío (máx. ${fmt(Math.max(...coldRev.map(p => p.cold_revs)))} rpm). El turbo y el aceite sufren: espera a ${OIL_WARM}° antes de apretar.` }); }
+    else tips.push({ k: 'ok', t: 'Nunca lo has subido de vueltas en frío. 👌' });
+  }
+  if (hot.length) { score -= Math.min(30, hot.length * 15); tips.push({ k: 'x', t: `${hot.length} vez${hot.length > 1 ? 'es' : ''} la temperatura pasó de 108 °C. Revisa el nivel de refrigerante y que el electroventilador funcione.` }); }
+  if (altLow) { score -= 10; tips.push({ k: 'w', t: `En marcha la tensión media es ${fmt(altAvg, 2)} V (lo normal: 13,8–14,7 V). Puede que el alternador o la batería empiecen a flojear.` }); }
+  else if (altAvg != null) tips.push({ k: 'ok', t: `El alternador carga bien (${fmt(altAvg, 2)} V de media en marcha).` });
+  score = Math.max(0, Math.min(100, score));
+  // Vida del aceite por km (todo el histórico)
+  const { results: oilR } = await env.DB.prepare("SELECT json_extract(data,'$.oil_life_pct') o, MIN(odometer) km, MIN(ts) ts FROM snapshots WHERE json_extract(data,'$.oil_life_pct') IS NOT NULL GROUP BY o ORDER BY km").all();
+  const oRate = await oilRate(env);
+  const kpd = await kmPerDay(env);
+  const lastOil = oilR.length ? oilR[oilR.length - 1] : null;
+  const odo = await currentOdo(env);
+  let oilEta = null;
+  if (lastOil && oRate && kpd > 1) { const left = Math.max(0, lastOil.o * oRate - (odo - lastOil.km)); oilEta = { km: Math.round(left), date: etaDate(left / kpd) }; }
+  // Récords
+  const allMax = await env.DB.prepare('SELECT MAX(max_rpm) r, MAX(max_oil) t FROM trips').first();
+  const cruise = live.filter(p => p.spd >= 110 && p.spd <= 125);
+  const total_s = trips.reduce((a, t) => a + (t.duration_s || 0), 0);
+  const month0 = new Date(Date.now() + 3600e3); month0.setUTCDate(1); month0.setUTCHours(0, 0, 0, 0);
+  return {
+    days, samples: live.length, trips: per.length, score, tips,
+    rpm_bands: rpmBands, gears, gear_ratios: GEAR_KMH_PER_1000, scatter,
+    warm: per.filter(p => p.warm_min != null || !p.reached).map(p => ({ id: p.id, ts: p.ts, min: p.warm_min, reached: p.reached, km: p.km })),
+    max_temp_trips: per.map(p => ({ id: p.id, ts: p.ts, t: p.max_temp })).filter(p => p.t),
+    alternator: altS.map(p => ({ ts: p.ts, v: p.alt_v })), alt_avg: altAvg,
+    oil: oilR.map(r => ({ km: r.km, ts: r.ts, pct: r.o })), oil_rate: oRate, oil_eta: oilEta,
+    records: {
+      max_rpm: allMax.r, max_temp: allMax.t,
+      over4000_min: Math.round(live.filter(p => p.rpm >= 4000).length / Math.max(1, live.length) * total_s / 60),
+      cruise_rpm: cruise.length ? Math.round(cruise.reduce((a, p) => a + p.rpm, 0) / cruise.length) : null,
+      cold_starts_month: per.filter(p => p.cold_start && p.ts >= month0.getTime() - 3600e3).length,
+      short_pct: road.length ? Math.round(short.length / road.length * 100) : null
+    }
+  };
 }
 
 async function listTrips(env, limit) {

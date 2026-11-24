@@ -134,7 +134,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
-let fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
+let fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, engine = null, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
 const hapEl = (() => {
@@ -194,6 +194,7 @@ async function loadFor(t, force) {
   if (t === 'datos') add('favhist', 600e3, async () => { favHist = await api('/api/fuel/fav/prices'); });
   if (t === 'datos') add('advice', 900e3, async () => { advice = await api('/api/fuel/advice'); });
   if (t === 'viajes') add('month', 600e3, async () => { monthSum = await api('/api/month'); });
+  if (t === 'motor') add('engine', 600e3, async () => { engine = await api('/api/engine?days=30'); });
   if (t === 'datos') add('expenses', 120e3, async () => { expenses = await api('/api/expenses'); });
   if (!jobs.length) return;
   try { await Promise.all(jobs); error = null; } catch (e) { error = e.message; }
@@ -465,6 +466,7 @@ function viewMotor(c) {
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">${c.outside_c != null ? 'Exterior' : 'Freno mano'}</span><span class="m" style="font-size:22px;font-weight:700">${c.outside_c != null ? nf(c.outside_c) + '°' : c.parking_brake == null ? '—' : c.parking_brake ? 'ON' : 'OFF'}</span></div>
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${c.battery_v != null ? nf(c.battery_v, 1) : c.battery_soc != null ? nf(c.battery_soc) + '%' : '—'}</span><span style="font-size:11px;color:${running ? (c.battery_v >= 13.4 ? C.ok : C.wa) : '#7d858f'}">${running ? (c.battery_v >= 13.4 ? 'Cargando' : 'Carga baja') : 'En reposo'}</span></div>
   </div>
+  ${engineSections()}
   <div class="pn pad col" style="gap:10px">
     <div class="row"><span class="k">Modo circuito</span>${c.track ? `<span class="tag" style="color:${C.ac};border-color:#4a4210">${c.track.auto ? esc(c.track.circuit) : 'Activo hasta las ' + hm(c.track.until)}</span>` : ''}</div>
     <span style="font-size:13px;color:#7d858f">Se activa solo en los circuitos de España y en el Nürburgring (GP, Nordschleife o las dos juntas). Sin avisos de presión, y los trayectos se guardan aparte de tus récords.</span>
@@ -474,6 +476,94 @@ function viewMotor(c) {
     ${customCircuits.map(cc => `<div class="row"><span style="font-size:14px">📍 ${esc(cc.name)}</span><button class="btn sec" style="padding:4px 10px;min-height:0" data-delcircuit="${esc(cc.id)}">Quitar</button></div>`).join('')}
   </div>
   ${running ? '<button class="btn sec" id="driveBtn">Pantalla grande del viaje</button>' : ''}`;
+}
+
+// ---------- Salud y uso del motor (últimos 30 días) ----------
+const GEAR_COL = ['#7d858f', '#4aa3ff', '#2ee59d', '#c9d45a', '#ffd400', '#ffb21e', '#ff4d3d'];
+function hbars(items, total, col) {
+  return items.map(it => { const p = total ? it.n / total * 100 : 0; return `<div style="display:grid;grid-template-columns:92px 1fr 40px;align-items:center;gap:8px;font-size:12px">
+    <span class="m" style="color:#b3bac2">${esc(it.label)}</span><div style="height:12px;border-radius:3px;background:#1d2126;overflow:hidden"><div style="height:100%;width:${p.toFixed(1)}%;background:${typeof col === 'function' ? col(it) : col}"></div></div><span class="m" style="text-align:right;font-weight:700">${Math.round(p)} %</span></div>`; }).join('');
+}
+function scatterSvg(e) {
+  const W = 340, H = 220, L0 = 34, B = 22, T = 8, R = 6, xmax = 200, ymax = 6500;
+  const x = v => L0 + v / xmax * (W - L0 - R), y = v => T + (1 - v / ymax) * (H - T - B);
+  let g = '';
+  for (const v of [0, 2000, 4000, 6000]) g += `<line x1="${L0}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#1d2126"/><text x="${L0 - 5}" y="${y(v) + 4}" text-anchor="end" fill="#7d858f" font-size="10">${v / 1000}k</text>`;
+  for (const v of [0, 50, 100, 150, 200]) g += `<text x="${x(v)}" y="${H - 6}" text-anchor="middle" fill="#7d858f" font-size="10">${v}</text>`;
+  (e.gear_ratios || []).forEach((r, i) => {
+    const vEnd = Math.min(xmax, r * ymax / 1000);
+    g += `<line x1="${x(0)}" y1="${y(0)}" x2="${x(vEnd)}" y2="${y(vEnd / r * 1000)}" stroke="${GEAR_COL[i + 1]}" stroke-width="1" opacity=".45" stroke-dasharray="3 4"/>`;
+    const lx = Math.min(xmax - 8, r * 6.1), ly = lx / r * 1000;
+    g += `<text x="${x(lx)}" y="${y(ly) - 4}" fill="${GEAR_COL[i + 1]}" font-size="10" font-weight="700">${i + 1}ª</text>`;
+  });
+  for (const [s, r, gr] of e.scatter) g += `<circle cx="${x(s).toFixed(1)}" cy="${y(r).toFixed(1)}" r="2.6" fill="${GEAR_COL[gr] || GEAR_COL[0]}" opacity=".85"/>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Velocidad frente a revoluciones, con las líneas de cada marcha">${g}<text x="${W - R}" y="${H - 6 - 12}" text-anchor="end" fill="#7d858f" font-size="9">km/h</text></svg>`;
+}
+function warmSvg(list) {
+  if (!list.length) return '<p class="muted">Aún no hay trayectos.</p>';
+  const W = 340, H = 120, L0 = 26, B = 18, T = 6, n = list.length, bw = (W - L0) / n, max = Math.max(15, ...list.map(w => w.min || 0));
+  const y = v => T + (1 - v / max) * (H - T - B);
+  let g = [0, Math.round(max / 2), max].map(v => `<line x1="${L0}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="#1d2126"/><text x="${L0 - 4}" y="${y(v) + 4}" text-anchor="end" fill="#7d858f" font-size="10">${v}</text>`).join('');
+  list.forEach((w, i) => {
+    const cx = L0 + i * bw + bw / 2;
+    if (w.reached && w.min != null) g += `<rect x="${(cx - bw * .3).toFixed(1)}" y="${y(w.min).toFixed(1)}" width="${(bw * .6).toFixed(1)}" height="${(H - B - y(w.min)).toFixed(1)}" rx="2" fill="${w.min <= 8 ? C.ok : w.min <= 14 ? C.wa : C.bad}"/>`;
+    else g += `<text x="${cx}" y="${H - B - 4}" text-anchor="middle" fill="${C.blue}" font-size="11" font-weight="700">✕</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Minutos hasta coger temperatura en cada trayecto">${g}<text x="${W}" y="${H - 4}" text-anchor="end" fill="#7d858f" font-size="9">min hasta temperatura · ✕ no llegó</text></svg>`;
+}
+function engineSections() {
+  const e = engine;
+  if (!e) return '<div class="pn pad"><p class="muted">Cargando salud del motor…</p></div>';
+  if (!e.trips) return '<div class="pn pad"><p class="muted">Aún no hay trayectos en los últimos 30 días para analizar el motor.</p></div>';
+  const sc = e.score, scol = sc >= 85 ? C.ok : sc >= 65 ? C.wa : C.bad;
+  const ic = { ok: ['✓', C.ok], w: ['⚠︎', C.wa], x: ['⛔', C.bad] };
+  const totR = e.rpm_bands.reduce((a, b) => a + b.n, 0), totG = e.gears.reduce((a, b) => a + b.n, 0);
+  const r = e.records;
+  const rec = (k, v, u, col) => `<div class="pn col" style="padding:12px;gap:4px;border-radius:12px"><span class="k">${k}</span><span class="m" style="font-size:20px;font-weight:700;${col ? 'color:' + col : ''}">${v}<span style="font-size:11px;color:#7d858f;font-weight:500"> ${u}</span></span></div>`;
+  return `
+  <div class="pn pad col" style="gap:12px">
+    <div class="row"><span class="k">Cuidado del motor · 30 días</span><span style="font-size:12px;color:#7d858f">${e.trips} trayectos</span></div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center">
+      <div style="width:84px;height:84px;border-radius:50%;background:conic-gradient(${scol} ${sc * 3.6}deg,#1d2126 0);display:grid;place-items:center"><div style="width:68px;height:68px;border-radius:50%;background:var(--pn,#111316);display:grid;place-items:center"><span class="m" style="font-size:26px;font-weight:700;color:${scol}">${sc}</span></div></div>
+      <div class="col" style="gap:7px">${e.tips.map(t => `<div style="display:grid;grid-template-columns:16px 1fr;gap:6px;font-size:13px;line-height:1.35"><span style="color:${ic[t.k][1]};font-weight:700">${ic[t.k][0]}</span><span>${esc(t.t)}</span></div>`).join('')}</div>
+    </div>
+  </div>
+  <div class="pn pad col" style="gap:8px">
+    <span class="k">Tiempo en cada franja de vueltas</span>
+    ${hbars(e.rpm_bands, totR, it => ({ 'Ralentí': C.mu, '1.100–2.000': C.blue, '2.000–2.500': '#2ee59d', '2.500–3.000': '#c9d45a', '3.000–4.000': C.ac, '4.000–5.000': C.wa, '+5.000': C.bad })[it.label] || C.ac)}
+    <span class="k" style="padding-top:8px">Marcha que llevas</span>
+    ${totG ? hbars(e.gears.map(g => ({ label: g.gear + 'ª', n: g.n, gear: g.gear })), totG, it => GEAR_COL[it.gear]) : '<p class="muted">Aún sin datos de marchas.</p>'}
+    <span class="muted" style="font-size:11px">Sobre ${nf(e.samples)} lecturas en marcha (el coche manda una cada ~2 min). La marcha se calcula con la velocidad y las vueltas.</span>
+  </div>
+  <div class="pn pad col" style="gap:6px">
+    <span class="k">Velocidad y vueltas · con las marchas</span>
+    ${scatterSvg(e)}
+    <span class="muted" style="font-size:11px">Cada punto es una lectura. Las líneas son tus 6 marchas (calibradas con tu coche). Los puntos fuera de las líneas son embrague pisado o cambiando.</span>
+  </div>
+  <div class="pn pad col" style="gap:6px">
+    <span class="k">Calentamiento por trayecto</span>
+    ${warmSvg(e.warm)}
+    ${e.max_temp_trips.some(t => t.t >= 108) ? `<span style="font-size:12px;color:${C.bad}">⛔ Algún trayecto pasó de 108 °C.</span>` : `<span class="muted" style="font-size:12px">Temperatura máxima en estos trayectos: ${nf(Math.max(...e.max_temp_trips.map(t => t.t)))} °C (normal hasta ~105).</span>`}
+  </div>
+  <div class="pn pad col" style="gap:6px">
+    <div class="row"><span class="k">Alternador · tensión en marcha</span>${e.alt_avg != null ? `<span class="m" style="font-weight:700;color:${e.alt_avg >= 13.5 ? C.ok : C.wa}">${nf(e.alt_avg, 2)} V</span>` : ''}</div>
+    ${e.alternator.length >= 2 ? lineChart(e.alternator, 'v', { min: 12.5, max: 15, fmt: v => nf(v, 1), color: C.blue, label: 'Tensión media en marcha por trayecto' }) : '<p class="muted">Hacen falta un par de trayectos más.</p>'}
+    <span class="muted" style="font-size:11px">Normal entre 13,8 y 14,7 V. Si va bajando por debajo de 13,5 V, revisa alternador y batería.</span>
+  </div>
+  <div class="pn pad col" style="gap:6px">
+    <div class="row"><span class="k">Vida del aceite</span>${e.oil.length ? `<span class="m" style="font-weight:700">${nf(e.oil[e.oil.length - 1].pct)} %</span>` : ''}</div>
+    ${e.oil.length >= 2 ? lineChart(e.oil, 'pct', { min: 0, max: 100, fmt: v => nf(v), color: C.ok, label: 'Vida del aceite' }) : ''}
+    <span class="muted" style="font-size:12px">${e.oil_eta ? `Al ritmo actual baja un 1 % cada ${nf(e.oil_rate)} km: cambio en unos ${nf(e.oil_eta.km)} km (≈ ${new Date(e.oil_eta.date).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}).` : 'La fecha del cambio sale cuando el % baje un par de puntos más.'}</span>
+  </div>
+  <div class="k" style="padding:6px 2px 0">Récords del motor</div>
+  <div class="g3">
+    ${rec('Rpm máx.', r.max_rpm != null ? nf(r.max_rpm) : '—', 'rpm', C.ac)}
+    ${rec('Temp. máx.', r.max_temp != null ? nf(r.max_temp) : '—', '°C')}
+    ${rec('+4.000 rpm', nf(r.over4000_min), 'min')}
+    ${rec('Crucero 120', r.cruise_rpm != null ? nf(r.cruise_rpm) : '—', 'rpm')}
+    ${rec('Arranques frío', nf(r.cold_starts_month), 'este mes')}
+    ${rec('Sin calentar', r.short_pct != null ? nf(r.short_pct) : '—', '% tray.', r.short_pct > 25 ? C.wa : null)}
+  </div>`;
 }
 
 function viewViajes() {
