@@ -1921,6 +1921,8 @@ async function getTyreSet(env) {
   if (ctr) { const h = JSON.parse(ctr.v); out.cold = h[h.length - 1] || null; }
   if (t.mounted_km != null && odo != null) out.km = Math.max(0, Math.round(odo - t.mounted_km));
   if (t.mounted_date) Object.assign(out, (({ km, days }) => ({ track_km: round(km, 1), track_days: days }))(await trackSince(env, t.mounted_date)));
+  out.track_km = round((out.track_km || 0) + (t.track_extra_km || 0), 0);
+  out.track_days = (out.track_days || 0) + (t.track_extra_days || 0);
   const base = t.rotated_km ?? t.mounted_km;
   if (base != null && odo != null) out.rotate_in_km = Math.round(base + 10000 - odo);
   // Vida orientativa: semi-slick (SuperSport R/RS, Cup, Trofeo) ~20.000 km; deportivo de calle como la SuperSport ~35.000 km;
@@ -1946,7 +1948,9 @@ async function getTyreSet(env) {
       const z = last[k];
       if (!z || typeof z !== 'object' || z.o == null || z.c == null || z.i == null) continue;
       if (z.c < Math.min(z.o, z.i) - 0.5) out.tread_notes.push(`${NAMES[k]}: más gastada en el centro (suele ser presión alta)`);
-      else if (z.o < z.c - 0.5 && z.i < z.c - 0.5) out.tread_notes.push(`${NAMES[k]}: gastados los dos hombros (suele ser presión baja)`);
+      else if (z.o < z.c - 0.5 && z.i < z.c - 0.5) out.tread_notes.push((out.track_km || t.track_extra_km) > 0
+        ? `${NAMES[k]}: hombros más gastados que el centro (normal si vas a circuito: en curva apoya el hombro; si no, sería presión baja)`
+        : `${NAMES[k]}: gastados los dos hombros (suele ser presión baja)`);
       else if (Math.abs(z.o - z.i) >= 0.8) out.tread_notes.push(`${NAMES[k]}: más gastada por ${z.i < z.o ? 'dentro' : 'fuera'} (revisa alineación/caída)`);
     }
     out.tread_rate = rate > 0 ? round(rate, 2) : null;
@@ -1994,6 +1998,9 @@ async function setTyreSet(env, b) {
     t.size = String(b.size || '').trim().slice(0, 30) || null;
     t.mounted_date = /^\d{4}-\d{2}-\d{2}$/.test(b.mounted_date || '') ? b.mounted_date : null;
     t.mounted_km = n(b.mounted_km);
+    // Tandas de circuito de antes de tener la app (o que la app no vio): vueltas × longitud
+    if (b.track_extra_km != null) { const x = Number(String(b.track_extra_km).replace(',', '.')); t.track_extra_km = x >= 0 && x < 20000 ? round(x, 0) : t.track_extra_km || 0; }
+    if (b.track_extra_days != null) { const x = Number(b.track_extra_days); t.track_extra_days = x >= 0 && x < 200 ? Math.round(x) : t.track_extra_days || 0; }
   }
   await env.DB.prepare("INSERT OR REPLACE INTO kv VALUES ('tyre_set', ?)").bind(JSON.stringify(t)).run();
   return getTyreSet(env);

@@ -1255,7 +1255,9 @@ function sheetHtml() {
       <label for="tySize">Medida<input id="tySize" value="${esc(t.size || '')}" placeholder="225/40 R18"></label>
       <div class="g2"><label for="tyDate">Montadas el<input id="tyDate" type="date" value="${esc(t.mounted_date || '')}"></label>
       <label for="tyKm">Km al montarlas<input id="tyKm" inputmode="numeric" value="${t.mounted_km != null ? t.mounted_km : ''}" placeholder="${t.odometer != null ? t.odometer : ''}"></label></div>
-      <p class="muted">Si no recuerdas los km exactos, pon una aproximación. Aviso de rotar cada 10.000 km.</p>
+      <div class="g2"><label for="tyTrk">Km de circuito sin registrar<input id="tyTrk" inputmode="numeric" value="${t.track_extra_km != null ? t.track_extra_km : ''}" placeholder="vueltas × longitud"></label>
+      <label for="tyTrd">Días de circuito sin registrar<input id="tyTrd" inputmode="numeric" value="${t.track_extra_days != null ? t.track_extra_days : ''}" placeholder="0"></label></div>
+      <p class="muted">Si no recuerdas los km exactos, pon una aproximación. Circuito: las tandas de antes de tener la app (p. ej. 47 vueltas a Albacete × 3,55 km = 167 km). Las que haga la app ya las cuenta sola. Aviso de rotar cada 10.000 km.</p>
       <div class="btns"><button class="btn sec" type="button" data-close>Cancelar</button><button class="btn" type="submit">Guardar</button></div>
     </form>`;
   }
@@ -1631,7 +1633,7 @@ function bindSheet() {
         tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ tread, new_mm: $('#trNew').value }) });
         sheet = null; flash('Medida guardada');
       } else if (sheet.type === 'tyreset') {
-        tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ model: $('#tyModel').value, size: $('#tySize').value, mounted_date: $('#tyDate').value, mounted_km: $('#tyKm').value }) });
+        tyreSet = await api('/api/tyreset', { method: 'POST', body: JSON.stringify({ model: $('#tyModel').value, size: $('#tySize').value, mounted_date: $('#tyDate').value, mounted_km: $('#tyKm').value, track_extra_km: $('#tyTrk').value || 0, track_extra_days: $('#tyTrd').value || 0 }) });
         sheet = null; flash('Neumáticos guardados');
       } else if (sheet.type === 'deadline') {
         deadlines = (await api('/api/deadlines', { method: 'POST', body: JSON.stringify({ id: sheet.item && sheet.item.id, name: $('#dName').value, date: $('#dDate').value }) })).items;
