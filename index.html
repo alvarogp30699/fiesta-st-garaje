@@ -134,6 +134,7 @@ const hashTab = location.hash.slice(1);
 let tab = !(cfg.url && cfg.key) ? 'ajustes' : TABS.includes(hashTab) ? hashTab : 'estado';
 let live = null, hist = null, battery = null, refuels = null, trips = null, records = null, tripDetail = null, maint = null, fuel = null, fuelErr = null;
 let error = null, notice = null, timer = null, sheet = null, loaded = {}, animate = true;
+let trackPrepData = null, prepTab = 'antes';
 let carCfg = (() => { try { return JSON.parse(localStorage.getItem('fst_car') || 'null'); } catch (e) { return null; } })(), fordSt = null, backups = null, favHist = null, advice = null, monthSum = null, engine = null, lastTrip = null, viajesPeriod = 'semana', tripFilter = 'todos', tripsAll = false, expenses = null, commute = null, places = [], tyrePrefs = null, tyreSet = null, deadlines = null, trackdays = null, driveDismissed = false, driveForced = false, parking = null, guard = null, circuits = null, customCircuits = [];
 
 // ---------- Vibración (Android: vibrate; iPhone: truco del interruptor nativo) ----------
@@ -196,6 +197,7 @@ async function loadFor(t, force) {
   if (t === 'estado') add('lasttrip', 120e3, async () => { const r = await api('/api/trips?limit=1'); lastTrip = r.trips && r.trips[0] || null; });
   if (t === 'estado' || t === 'datos') add('advice', 900e3, async () => { advice = await api('/api/fuel/advice'); });
   if (t === 'viajes') add('month', 600e3, async () => { monthSum = await api('/api/month'); });
+  if (t === 'motor') add('trackprep', 1800e3, async () => { trackPrepData = await api('/api/trackprep'); });
   if (t === 'motor') add('engine', 600e3, async () => { engine = await api('/api/engine?days=30'); });
   if (t === 'datos') add('expenses', 120e3, async () => { expenses = await api('/api/expenses'); });
   if (!jobs.length) return;
@@ -483,6 +485,7 @@ function viewMotor(c) {
     <div class="pn col" style="padding:12px;gap:6px;border-radius:12px"><span class="k">Batería</span><span class="m" style="font-size:22px;font-weight:700">${c.battery_v != null ? nf(c.battery_v, 1) : c.battery_soc != null ? nf(c.battery_soc) + '%' : '—'}</span><span style="font-size:11px;color:${running ? (c.battery_v >= 13.4 ? C.ok : C.wa) : '#7d858f'}">${running ? (c.battery_v >= 13.4 ? 'Cargando' : 'Carga baja') : 'En reposo'}</span></div>
   </div>
   ${engineSections()}
+  ${trackPrepCard()}
   <div class="pn pad col" style="gap:10px">
     <div class="row"><span class="k">Modo circuito</span>${c.track ? `<span class="tag" style="color:${C.ac};border-color:#4a4210">${c.track.auto ? esc(c.track.circuit) : 'Activo hasta las ' + hm(c.track.until)}</span>` : ''}</div>
     <span style="font-size:13px;color:#7d858f">Se activa solo en los circuitos de España y en el Nürburgring (GP, Nordschleife o las dos juntas). Sin avisos de presión, y los trayectos se guardan aparte de tus récords.</span>
@@ -492,6 +495,28 @@ function viewMotor(c) {
     ${customCircuits.map(cc => `<div class="row"><span style="font-size:14px">📍 ${esc(cc.name)}</span><button class="btn sec" style="padding:4px 10px;min-height:0" data-delcircuit="${esc(cc.id)}">Quitar</button></div>`).join('')}
   </div>
   ${running ? '<button class="btn sec" id="driveBtn">Pantalla grande del viaje</button>' : ''}`;
+}
+
+// ---------- Día de circuito: antes / después + mi lista ----------
+const PREP_ITEMS = ['Casco (y guantes si quieres)', 'Vaciar maletero y quitar objetos sueltos', 'Quitar la alfombrilla del conductor', 'Gancho de remolque puesto o a mano', 'Manómetro y llave dinamométrica', 'Compresor o inflador', 'Agua, comida y gorra', 'DNI, carné y reserva/pago de la tanda', 'Cinta para el número / dorsal si lo piden'];
+function prepChecks() { try { return JSON.parse(localStorage.getItem('fst_prep') || '{}'); } catch (e) { return {}; } }
+function trackPrepCard() {
+  const d = trackPrepData;
+  if (!d) return '';
+  const ic = { ok: ['✓', C.ok], w: ['⚠︎', C.wa], x: ['⛔', C.bad], i: ['•', C.mu] };
+  const list = prepTab === 'despues' ? d.after : d.before;
+  const done = prepChecks();
+  const nDone = PREP_ITEMS.filter((_, i) => done[i]).length;
+  return `<div class="pn pad col" style="gap:12px">
+    <div class="row"><span class="k">🏁 Día de circuito</span>${prepTab === 'antes' ? `<span style="font-size:12px;color:#7d858f">mi lista ${nDone}/${PREP_ITEMS.length}</span>` : ''}</div>
+    <div class="seg-pick" role="group" aria-label="Antes o después"><button type="button" data-prep="antes" class="${prepTab === 'antes' ? 'on' : ''}">Antes de ir</button><button type="button" data-prep="despues" class="${prepTab === 'despues' ? 'on' : ''}">Al volver</button></div>
+    <div class="col" style="gap:10px">${list.map(c => `<div style="display:grid;grid-template-columns:18px 1fr;gap:8px;font-size:13px;line-height:1.4"><span style="color:${ic[c.k][1]};font-weight:700">${ic[c.k][0]}</span><span><b>${esc(c.title)}.</b> ${esc(c.text)}</span></div>`).join('')}</div>
+    ${prepTab === 'antes' ? `<div class="col" style="gap:2px;padding-top:6px;border-top:1px solid #1d2126">
+      <span class="k" style="padding:6px 0">Llevar / hacer</span>
+      ${PREP_ITEMS.map((t, i) => `<label style="display:flex;gap:10px;align-items:center;min-height:40px;font-size:14px;color:${done[i] ? '#7d858f' : 'inherit'};${done[i] ? 'text-decoration:line-through' : ''}"><input type="checkbox" data-prepck="${i}" ${done[i] ? 'checked' : ''} style="width:20px;height:20px;accent-color:${C.ac}">${esc(t)}</label>`).join('')}
+      ${nDone ? '<button class="btn ghost" data-prepreset style="min-height:40px;margin-top:6px">Vaciar la lista</button>' : ''}
+    </div>` : ''}
+  </div>`;
 }
 
 // ---------- Salud y uso del motor (últimos 30 días) ----------
@@ -1448,6 +1473,9 @@ function afterRender() {
   });
   document.querySelectorAll('[data-tyreset]').forEach(b => b.onclick = () => { sheet = { type: 'tyreset' }; render(); });
   document.querySelectorAll('[data-tread]').forEach(b => b.onclick = () => { sheet = { type: 'tread' }; render(); });
+  document.querySelectorAll('[data-prep]').forEach(b => b.onclick = () => { prepTab = b.dataset.prep; haptic(); render(); });
+  document.querySelectorAll('[data-prepck]').forEach(c => c.onchange = () => { const d = prepChecks(); d[c.dataset.prepck] = c.checked; try { localStorage.setItem('fst_prep', JSON.stringify(d)); } catch (e) {} render(); });
+  document.querySelectorAll('[data-prepreset]').forEach(b => b.onclick = () => { try { localStorage.removeItem('fst_prep'); } catch (e) {} render(); });
   document.querySelectorAll('[data-period]').forEach(b => b.onclick = () => { viajesPeriod = b.dataset.period; haptic(); render(); });
   document.querySelectorAll('[data-tfilter]').forEach(b => b.onclick = () => { tripFilter = b.dataset.tfilter; tripsAll = false; haptic(); render(); });
   document.querySelectorAll('[data-tmore]').forEach(b => b.onclick = () => { tripsAll = true; render(); });

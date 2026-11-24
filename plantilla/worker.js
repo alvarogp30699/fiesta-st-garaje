@@ -110,6 +110,7 @@ export default {
       if (m === 'GET' && p === '/api/widget') return json(await widget(env));
       if (m === 'GET' && p === '/api/fuel/advice') return json(await refuelAdvice(env));
       if (m === 'GET' && p === '/api/engine') return json(await engineStats(env, clampInt(url.searchParams.get('days'), 7, 365, 30)));
+      if (m === 'GET' && p === '/api/trackprep') return json(await trackPrep(env));
       if (m === 'GET' && p === '/api/car-config') return json(await carConfig(env));
       if (m === 'POST' && p === '/api/car-config') return json(await setCarConfig(env, await req.json()));
       if (m === 'GET' && p === '/api/month') return json(await monthSummary(env, url.searchParams.get('m')));
@@ -1084,6 +1085,52 @@ async function pumpPhoto(env, ts) {
   const [, b64] = ph.split(',');
   const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   return new Response(bin, { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400', 'access-control-allow-origin': '*' } });
+}
+
+// ---------- Preparar un día de circuito (antes) y revisar después ----------
+async function trackPrep(env) {
+  const [ts, maint, car, td] = await Promise.all([getTyreSet(env), listMaint(env), getLive(env), trackDays(env).catch(() => ({ days: [] }))]);
+  const before = [], after = [];
+  const add = (arr, k, title, text) => arr.push({ k, title, text });
+  // Neumáticos: dibujo y hombros
+  const L = ts.tread_last;
+  if (L) {
+    const zm = z => z == null ? null : typeof z === 'number' ? z : Math.min(...[z.o, z.c, z.i].filter(v => v != null));
+    const min = Math.min(...['fl', 'fr', 'rl', 'rr'].map(k => zm(L[k])).filter(v => v != null));
+    const since = car.odometer_km != null ? car.odometer_km - L.km : 0;
+    const now = ts.tread_rate ? round(min - ts.tread_rate * since / 1000, 1) : min;
+    add(before, now >= 4 ? 'ok' : now >= 3 ? 'w' : 'x', 'Dibujo', now >= 4 ? `≈${fmt(now, 1)} mm en la rueda más gastada: bien para pista.` : now >= 3 ? `≈${fmt(now, 1)} mm: vale para seco, pero en pista se calientan más y bajan rápido. Si llueve, mejor no.` : `≈${fmt(now, 1)} mm: muy justas para circuito. Cámbialas antes.`);
+  } else add(before, 'i', 'Dibujo', 'Mide el dibujo (Taller → Medir dibujo) para saber si aguantan el día.');
+  if (ts.rotate_in_km != null && ts.rotate_in_km < 1500) add(before, 'i', 'Permuta', `La permuta toca en ${fmt(Math.max(0, ts.rotate_in_km))} km: hazla antes de ir y llegas con las cuatro igual.`);
+  // Presiones
+  const ref = car.tyre_ref || {};
+  add(before, 'i', 'Presiones', `Sal con tus presiones en frío (${fmt(ref.fl ?? 2.2, 1)} delante / ${fmt(ref.rl ?? 2.1, 1)} detrás). En pista suben 0,3–0,5 bar: mídelas nada más entrar a boxes y, si pasan de ~2,5 en caliente, quita aire hasta dejarlas ahí. Apunta lo que quitas para la próxima vez.`);
+  // Frenos
+  const fluid = maint.items.find(i => /l[ií]quido de frenos/i.test(i.name));
+  if (fluid && fluid.last_date) {
+    const months = (Date.now() - Date.parse(fluid.last_date)) / (30.4 * 86400e3);
+    add(before, months <= 12 ? 'ok' : 'w', 'Líquido de frenos', months <= 12 ? `Cambiado hace ${Math.round(months)} meses: bien.` : `Cambiado hace ${Math.round(months)} meses. Con calor de pista el líquido viejo hierve y el pedal se va al fondo: purga o cámbialo (DOT 4 de alto punto de ebullición) antes de ir.`);
+  } else add(before, 'w', 'Líquido de frenos', 'No sé cuándo se cambió. En pista es lo primero que falla (el pedal se va al fondo): si no lo recuerdas, cámbialo antes de ir y apúntalo en Taller.');
+  const pads = maint.items.find(i => /pastilla/i.test(i.name));
+  if (pads && pads.rem_km != null) add(before, pads.rem_km > 3000 ? 'ok' : 'w', 'Pastillas', pads.rem_km > 3000 ? `Según el cálculo les quedan ~${fmt(pads.rem_km)} km (en pista gastan 5 veces más): mira el grosor igualmente.` : `Les quedan poco (~${fmt(Math.max(0, pads.rem_km))} km de calle; en pista se gastan 5 veces más). Revísalas antes de ir.`);
+  else add(before, 'i', 'Pastillas', 'Mira el grosor por los radios de la llanta (mínimo ~3 mm de material). En pista se gastan unas 5 veces más que en calle.');
+  // Aceite y motor
+  const oil = car.oil_life_pct;
+  add(before, oil == null ? 'i' : oil >= 30 ? 'ok' : 'w', 'Aceite', `${oil != null ? `Vida del aceite ${oil} %. ` : ''}Comprueba el nivel con la varilla en llano y en frío: en pista el motor gasta algo de aceite y en curvas largas un nivel bajo puede dejar sin presión.${oil != null && oil < 30 ? ' Con tan poca vida, mejor cambiarlo antes.' : ''}`);
+  // Gasolina
+  const fuelL = car.fuel_pct != null ? car.fuel_pct / 100 * TANK_L : null;
+  add(before, 'i', 'Gasolina', `En pista el ST gasta unos 25–30 l/100: una tanda de 20 vueltas en Albacete son ~20 L. ${fuelL != null ? `Ahora llevas ~${fmt(fuelL, 0)} L. ` : ''}Ve con el depósito lleno y mira dónde repostar cerca del circuito.`);
+  // Después: según el último día de circuito
+  const last = (td.days || [])[0];
+  const extraKm = ts.track_extra_km || 0;
+  const lapsInfo = last ? `${fmt(last.km, 0)} km en ${last.circuit} el ${last.day}` : extraKm ? `${fmt(extraKm, 0)} km de circuito apuntados` : null;
+  if (lapsInfo) add(after, 'i', 'Tu último día', lapsInfo + '.');
+  add(after, 'i', 'Tornillos de rueda', 'Repasa el apriete de los tornillos con la llave dinamométrica al par del manual: con el calor de los frenos pueden aflojarse.');
+  add(after, 'i', 'Presiones', 'Al día siguiente, en frío, vuelve a dejarlas a tus presiones de diario (si quitaste aire en pista, se quedarán bajas).');
+  add(after, 'i', 'Neumáticos', 'Mide el dibujo en las tres zonas: verás cuánto se ha comido el hombro. Mira también que no haya goma levantada o "granos" (graining).');
+  add(after, 'i', 'Frenos', 'Si el pedal estuvo largo o los frenos olían mucho, purga el líquido. Mira el grosor de las pastillas y que los discos no tengan grietas.');
+  add(after, 'i', 'Aceite', 'Vuelve a mirar el nivel: si ha bajado, rellena con el mismo aceite.');
+  return { before, after };
 }
 
 // ---------- Tu coche: nombre, modelo y depósito (para que la app valga para cualquier Ford conectado) ----------
