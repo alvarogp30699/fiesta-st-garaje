@@ -771,49 +771,107 @@ ${pts.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}">${p[3] ? `<time>${new Date(p[
   shareBlob(new Blob([gpx], { type: 'application/gpx+xml' }), `trayecto-${t.id}.gpx`, name);
 }
 
-function shareTripImage(t) {
+// Imagen para compartir: mapa oscuro de OpenStreetMap con la ruta por carretera, título que cabe y datos
+async function shareTripImage(t) {
   if (!t) return;
+  flash('Preparando la imagen…');
   const W = 1080, H = 1350, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const g = cv.getContext('2d');
   g.fillStyle = '#0a0b0d'; g.fillRect(0, 0, W, H);
   const pts = (t.points || []).filter(p => p[0] != null);
-  // Recorrido
-  const box = { x: 80, y: 260, w: W - 160, h: 620 };
-  g.strokeStyle = '#1b1e22'; g.lineWidth = 2; g.strokeRect(box.x, box.y, box.w, box.h);
-  if (pts.length > 1) {
-    const la = pts.map(p => p[0]), lo = pts.map(p => p[1]);
-    const minLa = Math.min(...la), maxLa = Math.max(...la), minLo = Math.min(...lo), maxLo = Math.max(...lo);
-    const k = Math.cos((minLa + maxLa) / 2 * Math.PI / 180);
-    const sx = (maxLo - minLo) * k || 1e-6, sy = (maxLa - minLa) || 1e-6;
-    const sc = Math.min((box.w - 80) / sx, (box.h - 80) / sy);
-    const ox = box.x + (box.w - sx * sc) / 2, oy = box.y + (box.h - sy * sc) / 2;
-    const P = p => [ox + (p[1] - minLo) * k * sc, oy + (maxLa - p[0]) * sc];
-    g.lineWidth = 10; g.lineCap = 'round'; g.lineJoin = 'round';
-    for (let i = 1; i < pts.length; i++) {
-      const v = pts[i][2] || 0;
-      g.strokeStyle = t.max_speed == null ? '#ffd400' : v > 95 ? '#ff4d3d' : v >= 70 ? '#ffb21e' : '#ffd400';
-      const [a, b] = P(pts[i - 1]), [c, d] = P(pts[i]);
-      g.beginPath(); g.moveTo(a, b); g.lineTo(c, d); g.stroke();
+  const legs = t.path && t.path.legs ? t.path.legs : null;
+  // Segmentos a dibujar: por carretera si la hay; si no, entre lecturas
+  const segs = legs ? legs.map(l => ({ c: l.c, s: l.s, dash: t.path.sparse })) : pts.slice(1).map((p, i) => ({ c: [[pts[i][0], pts[i][1]], [p[0], p[1]]], s: p[2] }));
+  const all = segs.flatMap(s => s.c);
+  const box = { x: 60, y: 300, w: W - 120, h: 640 };
+  const col = v => v == null || t.max_speed == null ? '#ffd400' : v > 95 ? '#ff4d3d' : v >= 70 ? '#ffb21e' : '#ffd400';
+  // Proyección Mercator: el zoom más grande en el que cabe la ruta con margen
+  const mx = (lon, z) => (lon + 180) / 360 * 256 * 2 ** z;
+  const my = (lat, z) => { const r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 256 * 2 ** z; };
+  g.save(); g.beginPath(); g.roundRect ? g.roundRect(box.x, box.y, box.w, box.h, 28) : g.rect(box.x, box.y, box.w, box.h); g.clip();
+  g.fillStyle = '#121418'; g.fillRect(box.x, box.y, box.w, box.h);
+  if (all.length > 1) {
+    const la = all.map(p => p[0]), lo = all.map(p => p[1]);
+    const [minLa, maxLa, minLo, maxLo] = [Math.min(...la), Math.max(...la), Math.min(...lo), Math.max(...lo)];
+    let z = 17;
+    while (z > 3 && (mx(maxLo, z) - mx(minLo, z) > box.w - 160 || my(minLa, z) - my(maxLa, z) > box.h - 160)) z--;
+    const cx = (mx(minLo, z) + mx(maxLo, z)) / 2, cy = (my(minLa, z) + my(maxLa, z)) / 2;
+    const ox = box.x + box.w / 2 - cx, oy = box.y + box.h / 2 - cy;
+    const P = p => [mx(p[1], z) + ox, my(p[0], z) + oy];
+    // Teselas de OpenStreetMap (si no cargan, queda el fondo liso)
+    try {
+      const tx0 = Math.floor((cx - box.w / 2) / 256), tx1 = Math.floor((cx + box.w / 2) / 256), ty0 = Math.floor((cy - box.h / 2) / 256), ty1 = Math.floor((cy + box.h / 2) / 256);
+      const off = document.createElement('canvas'); off.width = box.w; off.height = box.h;
+      const og = off.getContext('2d');
+      const jobs = [];
+      for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) jobs.push(new Promise(ok => {
+        const im = new Image(); im.crossOrigin = 'anonymous';
+        im.onload = () => { og.drawImage(im, x * 256 - (cx - box.w / 2), y * 256 - (cy - box.h / 2)); ok(true); };
+        im.onerror = () => ok(false);
+        im.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+      }));
+      const res = await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(() => r(null), 8000))]);
+      if (res && res.some(Boolean)) {
+        // Modo oscuro como en la app: invertir, girar el tono y bajar el brillo
+        const id = og.getImageData(0, 0, box.w, box.h), d = id.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = 255 - d[i], gg = 255 - d[i + 1], b = 255 - d[i + 2];
+          // rotación de tono 180° aproximada (intercambia azules/naranjas) y apagado
+          const l = (r + gg + b) / 3;
+          d[i] = (l * .55 + (255 - r) * .08) * .62; d[i + 1] = (l * .55 + (255 - gg) * .08) * .64; d[i + 2] = (l * .55 + (255 - b) * .08) * .70;
+        }
+        og.putImageData(id, 0, 0);
+        g.drawImage(off, box.x, box.y);
+      }
+    } catch (e) { /* sin mapa de fondo */ }
+    // Ruta: primero un borde oscuro y luego el color de cada tramo
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const pass of [0, 1]) for (const sg of segs) {
+      g.beginPath(); sg.c.forEach((p, i) => { const [x, y] = P(p); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+      g.setLineDash(pass && sg.dash ? [4, 22] : []);
+      g.strokeStyle = pass ? col(sg.s) : 'rgba(0,0,0,.65)'; g.lineWidth = pass ? 11 : 19; g.stroke();
     }
-    const dot = (p, col) => { const [x, y] = P(p); g.fillStyle = col; g.beginPath(); g.arc(x, y, 16, 0, 7); g.fill(); g.strokeStyle = '#0a0b0d'; g.lineWidth = 5; g.stroke(); };
-    dot(pts[0], '#2ee59d'); dot(pts[pts.length - 1], '#f4f5f6');
+    g.setLineDash([]);
+    const dot = (p, c) => { const [x, y] = P(p); g.fillStyle = c; g.beginPath(); g.arc(x, y, 17, 0, 7); g.fill(); g.strokeStyle = '#0a0b0d'; g.lineWidth = 6; g.stroke(); };
+    dot(all[0], '#2ee59d'); dot(all[all.length - 1], '#f4f5f6');
   }
-  // Textos
-  g.fillStyle = '#ffd400'; g.font = '700 34px "Chakra Petch", monospace'; g.fillText('FIESTA ST', 80, 110);
-  g.fillStyle = '#f4f5f6'; g.font = '700 64px "Chakra Petch", monospace';
-  g.fillText((t.from || t.to ? `${t.from || '…'} → ${t.to || '…'}` : `Trayecto #${t.id}`).toUpperCase().slice(0, 26), 80, 190);
+  g.restore();
+  g.strokeStyle = '#23272d'; g.lineWidth = 2; g.beginPath(); g.roundRect ? g.roundRect(box.x, box.y, box.w, box.h, 28) : g.rect(box.x, box.y, box.w, box.h); g.stroke();
+  g.fillStyle = 'rgba(10,11,13,.7)'; g.fillRect(box.x + box.w - 230, box.y + box.h - 34, 214, 24);
+  g.fillStyle = '#9aa1a9'; g.font = '500 18px "Inter Tight", sans-serif'; g.textAlign = 'right'; g.fillText('© OpenStreetMap', box.x + box.w - 22, box.y + box.h - 16); g.textAlign = 'left';
+  // Textos: el título se reduce hasta caber y, si hace falta, va en dos líneas
+  const model = carCfg && carCfg.model ? carCfg.model.split('·')[0].trim() : 'Fiesta ST';
+  g.fillStyle = '#ffd400'; g.font = '700 32px "Chakra Petch", monospace'; g.fillText(model.toUpperCase(), 60, 96);
+  const from = (t.from || '').toUpperCase(), to = (t.to || '').toUpperCase();
+  const maxW = W - 120;
+  const fit = (txt, start, min) => { let fs = start; do { g.font = `700 ${fs}px "Chakra Petch", monospace`; if (g.measureText(txt).width <= maxW) return fs; fs -= 2; } while (fs > min); return fs; };
+  g.fillStyle = '#f4f5f6';
+  if (from || to) {
+    const one = `${from || '…'} → ${to || '…'}`;
+    const fs1 = fit(one, 66, 46);
+    if (g.measureText(one).width <= maxW) { g.font = `700 ${fs1}px "Chakra Petch", monospace`; g.fillText(one, 60, 186); }
+    else {
+      const l1 = from || '…', l2 = '→ ' + (to || '…');
+      const fs = Math.min(fit(l1, 58, 30), fit(l2, 58, 30));
+      g.font = `700 ${fs}px "Chakra Petch", monospace`; g.fillText(l1, 60, 158); g.fillText(l2, 60, 158 + fs + 6);
+    }
+  } else { g.font = '700 66px "Chakra Petch", monospace'; g.fillText(`TRAYECTO #${t.id}`, 60, 186); }
   g.fillStyle = '#7d858f'; g.font = '500 30px "Inter Tight", sans-serif';
-  g.fillText(new Date(t.start_ts).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }) + ` · ${hm(t.start_ts)} → ${hm(t.end_ts)}`, 80, 236);
+  g.fillText(new Date(t.start_ts).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }) + ` · ${hm(t.start_ts)} → ${hm(t.end_ts)}`, 60, 270);
   const l100 = t.km > 1 && t.fuel_used_l ? t.fuel_used_l / t.km * 100 : null;
   const stats = [['DISTANCIA', nf(t.km, 1) + ' km'], ['TIEMPO', t.duration_s < 3600 ? Math.round(t.duration_s / 60) + ' min' : Math.floor(t.duration_s / 3600) + ' h ' + String(Math.round(t.duration_s % 3600 / 60)).padStart(2, '0')], ['MEDIA', nf(t.avg_speed) + ' km/h'],
-    ['PUNTA', t.max_speed != null ? nf(t.max_speed) + ' km/h' : '—'], ['CONSUMO', l100 ? nf(l100, 1) + ' l/100' : '—'], ['COSTE', t.cost_eur != null ? nf(t.cost_eur, 2) + ' €' : '—']];
+    ['PUNTA', t.max_speed != null && !t.max_speed_low ? nf(t.max_speed) + ' km/h' : '—'], ['CONSUMO', l100 ? (t.km < 15 ? '≈' : '') + nf(l100, 1) + ' l/100' : '—'], ['COSTE', t.cost_eur != null ? nf(t.cost_eur, 2) + ' €' : '—']];
   stats.forEach(([k, v], i) => {
-    const x = 80 + (i % 3) * 320, y = 980 + Math.floor(i / 3) * 150;
+    const x = 60 + (i % 3) * 330, y = 1020 + Math.floor(i / 3) * 140;
     g.fillStyle = '#7d858f'; g.font = '600 24px "Chakra Petch", monospace'; g.fillText(k, x, y);
-    g.fillStyle = i === 3 ? '#ffd400' : '#f4f5f6'; g.font = '700 48px "Chakra Petch", monospace'; g.fillText(v, x, y + 60);
+    g.fillStyle = i === 3 ? '#ffd400' : '#f4f5f6'; g.font = '700 50px "Chakra Petch", monospace'; g.fillText(v, x, y + 60);
   });
-  if (t.circuit) { g.fillStyle = '#ffd400'; g.font = '700 30px "Chakra Petch", monospace'; g.fillText('🏁 ' + t.circuit, 80, 1290); }
-  cv.toBlob(b => shareBlob(b, `trayecto-${t.id}.png`, 'Trayecto'), 'image/png');
+  if (t.circuit) { g.fillStyle = '#ffd400'; g.font = '700 30px "Chakra Petch", monospace'; g.fillText('🏁 ' + t.circuit, 60, 1300); }
+  let blob;
+  try { blob = await new Promise((ok, ko) => cv.toBlob(b => b ? ok(b) : ko(), 'image/png')); }
+  catch (e) { flash('No se ha podido crear la imagen'); return; }
+  // iOS solo deja compartir justo después de un toque: se enseña la imagen con su botón
+  sheet = { type: 'shareimg', blob, name: `trayecto-${t.id}.png`, url: URL.createObjectURL(blob) }; render();
 }
 
 function adviceBox() {
@@ -1251,6 +1309,13 @@ function sheetHtml() {
       <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Guardar nota</button></div>
     </form>`;
   }
+  if (sheet.type === 'shareimg') {
+    return `<form class="sheet" id="sheetForm" style="max-height:90vh;overflow:auto">
+      <span class="k">Imagen del trayecto</span>
+      <img src="${sheet.url}" alt="Imagen del trayecto para compartir" style="width:100%;border-radius:12px">
+      <div class="btns"><button class="btn sec" type="button" data-close>Cerrar</button><button class="btn" type="submit">Compartir</button></div>
+    </form>`;
+  }
   if (sheet.type === 'donecost') {
     return `<form class="sheet" id="sheetForm">
       <span class="k">${esc(sheet.name)} · apuntado con los km de hoy</span>
@@ -1649,6 +1714,7 @@ function bindSheet() {
   const form = $('#sheetForm');
   form.onsubmit = async e => {
     e.preventDefault();
+    if (sheet.type === 'shareimg') { shareBlob(sheet.blob, sheet.name, 'Trayecto'); return; } // justo tras el toque, como exige iOS
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
       if (sheet.type === 'donecost') {
