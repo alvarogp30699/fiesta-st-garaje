@@ -976,8 +976,11 @@ async function getRefuels(env) {
   }
   // Último depósito cerrado (para enseñarlo mientras el actual aún tiene pocos km)
   const lastClosed = list.find(r => r.l100 != null);
-  const prev_tank = lastClosed ? { km: lastClosed.km, l100: lastClosed.l100, litres: lastClosed.litres, full: !!lastClosed.full_to_full,
+  const prev_tank0 = lastClosed ? { km: lastClosed.km, l100: lastClosed.l100, litres: lastClosed.litres, full: !!lastClosed.full_to_full,
     eur_km: lastClosed.price_total && lastClosed.km ? round(lastClosed.price_total / lastClosed.km, 3) : null } : null;
+  const prev_tank = prev_tank0;
+  // Recién repostado: la autonomía se calcula con el consumo del depósito anterior
+  if (tank && tank.range_km == null && prev_tank && prev_tank.l100) { tank.range_km = Math.round(tank.left_l / prev_tank.l100 * 100); tank.range_from_prev = true; }
   return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L, tank, prev_tank };
 }
 
