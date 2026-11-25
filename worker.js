@@ -954,7 +954,10 @@ async function getRefuels(env) {
     let km = null, l100 = null;
     if (p) {
       km = round(r.odometer - p.odometer, 1);
-      const used = ((p.fuel_after - r.fuel_before) / 100) * TANK_L * ff;
+      // Lleno a lleno (los dos al 97 % o más): los litros que entran son exactamente lo gastado. Si no, el aforador corregido.
+      const full = p.fuel_after >= 97 && r.fuel_after >= 97 && r.litres > 0;
+      const used = full ? r.litres : ((p.fuel_after - r.fuel_before) / 100) * TANK_L * ff;
+      r.full_to_full = full;
       if (km > 20 && r.fuel_before != null && p.fuel_after != null) { l100 = round((used / km) * 100, 1); totalUsed += used; totalKm += km; }
     }
     const price_l = r.price_total && r.litres ? round(r.price_total / r.litres, 3) : r.price_l ?? null;
@@ -971,7 +974,11 @@ async function getRefuels(env) {
     const l100 = km >= 50 ? round(used / km * 100, 1) : null;
     tank = { since: last.ts, km, used_l: round(used, 1), l100, left_l: round(left, 1), range_km: l100 ? Math.round(left / l100 * 100) : null };
   }
-  return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L, tank };
+  // Último depósito cerrado (para enseñarlo mientras el actual aún tiene pocos km)
+  const lastClosed = list.find(r => r.l100 != null);
+  const prev_tank = lastClosed ? { km: lastClosed.km, l100: lastClosed.l100, litres: lastClosed.litres, full: !!lastClosed.full_to_full,
+    eur_km: lastClosed.price_total && lastClosed.km ? round(lastClosed.price_total / lastClosed.km, 3) : null } : null;
+  return { refuels: list, avg_l100: totalKm ? round((totalUsed / totalKm) * 100, 1) : null, tank_l: TANK_L, tank, prev_tank };
 }
 
 // Calibra el aforador: litros reales del repostaje frente a lo que marcó el depósito desde el anterior lleno
@@ -1076,7 +1083,7 @@ async function savePump(env, body) {
 
 async function favName(env) {
   const row = await env.DB.prepare("SELECT v FROM kv WHERE k = 'fav_station'").first();
-  try { return row ? JSON.parse(row.v).name || null : null; } catch (e) { return null; }
+  try { if (!row) return null; const f = JSON.parse(row.v); return [titleCase(f.name || ''), titleCase(f.town || '')].filter(Boolean).join(' ') || null; } catch (e) { return null; }
 }
 
 async function pumpPhoto(env, ts) {

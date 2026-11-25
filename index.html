@@ -945,14 +945,15 @@ function viewDatos() {
       <span class="col" style="gap:1px;align-items:flex-end"><span class="m" style="font-size:20px;font-weight:700;color:${i === 0 ? C.ac : C.tx}"><span style="font-size:11px;color:#7d858f;font-weight:500">${cfg.fuel} </span>${nf(s.price, 3)}</span><span class="m" style="font-size:13px;color:#9aa2ab">${other} ${s['p' + other] ? nf(s['p' + other], 3) : '—'}</span></span>
     </a>${star(s)}</div>`).join('');
   const tk = refuels.tank;
-  const l100 = tk && tk.l100 != null ? tk.l100 : refuels.avg_l100; // un solo consumo: el del depósito (el que cuadra con el coche)
+  const l100 = tk && tk.l100 != null ? tk.l100 : refuels.prev_tank ? refuels.prev_tank.l100 : refuels.avg_l100; // un solo consumo: el del depósito (el que cuadra con el coche)
   const eurKm2 = pL && l100 ? pL * l100 / 100 : null;
   return `
   <div class="pn" style="padding:4px 16px">
     ${tk ? `<div class="col" style="gap:6px;padding:12px 0;border-bottom:1px solid #1d2126"><span class="k">Depósito actual · desde el ${new Date(tk.since).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</span>
-      <div class="g3" style="gap:8px"><span class="col"><span class="m" style="font-size:24px;font-weight:700">${tk.l100 != null ? nf(tk.l100, 1) : '—'}</span><span class="muted" style="font-size:11px">l/100 de media</span></span>
+      <div class="g3" style="gap:8px"><span class="col"><span class="m" style="font-size:24px;font-weight:700">${tk.l100 != null ? nf(tk.l100, 1) : '—'}</span><span class="muted" style="font-size:11px">${tk.l100 != null ? 'l/100 de media' : 'l/100 (a partir de 50 km)'}</span></span>
       <span class="col"><span class="m" style="font-size:24px;font-weight:700">${nf(tk.km)}</span><span class="muted" style="font-size:11px">km · ${nf(tk.used_l, 1)} L</span></span>
-      <span class="col"><span class="m" style="font-size:24px;font-weight:700">≈${nf(tk.left_l, 0)} L</span><span class="muted" style="font-size:11px">${tk.range_km != null ? '≈' + nf(tk.range_km) + ' km a este ritmo' : 'quedan'}</span></span></div></div>` : ''}
+      <span class="col"><span class="m" style="font-size:24px;font-weight:700">≈${nf(tk.left_l, 0)} L</span><span class="muted" style="font-size:11px">${tk.range_km != null ? '≈' + nf(tk.range_km) + ' km a este ritmo' : 'quedan'}</span></span></div>
+      ${refuels.prev_tank ? `<span style="font-size:12px;color:#7d858f">Depósito anterior${refuels.prev_tank.full ? ' (lleno a lleno, exacto)' : ''}: <b style="color:var(--tx)">${nf(refuels.prev_tank.l100, 1)} l/100</b> en ${nf(refuels.prev_tank.km)} km${refuels.prev_tank.eur_km ? ` · ${nf(refuels.prev_tank.eur_km * 100, 1)} cts/km` : ''}</span>` : ''}</div>` : ''}
     <div class="g3" style="gap:8px;padding:12px 0;border-bottom:1px solid #1d2126">
       <span class="col"><span class="k">Gasto ${esc(monthName)}</span><span class="m" style="font-size:18px;font-weight:700">${month.length ? nf(spend, 2) + ' €' : '—'}</span></span>
       <span class="col"><span class="k">Coste/km</span><span class="m" style="font-size:18px;font-weight:700">${eurKm2 ? nf(eurKm2 * 100, 1) + ' cts' : '—'}</span></span>
